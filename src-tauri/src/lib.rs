@@ -251,8 +251,8 @@ pub fn run() {
             add_chapter_index
         ])
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        #[cfg(target_os = "macos")]
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_ignore_cursor_events(true);
@@ -260,12 +260,14 @@ pub fn run() {
             }
 
             let app_handle = app.handle().clone();
-            if let Err(error) = spawn_global_mouse_events(app_handle.clone()) {
-                eprintln!("Failed to start global mouse monitoring: {error}");
+            thread::spawn(move || {
+                if let Err(error) = spawn_global_mouse_events(app_handle.clone()) {
+                    eprintln!("Failed to start global mouse monitoring: {error}");
 
-                #[cfg(debug_assertions)]
-                spawn_dummy_mouse_events(app_handle);
-            }
+                    #[cfg(debug_assertions)]
+                    spawn_dummy_mouse_events(app_handle);
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
