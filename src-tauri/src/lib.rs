@@ -1,5 +1,7 @@
 use std::sync::Mutex;
+#[cfg(debug_assertions)]
 use std::thread;
+#[cfg(debug_assertions)]
 use std::time::Duration;
 
 use serde::Serialize;
@@ -30,6 +32,7 @@ struct ChapterIndexResult {
 }
 
 #[derive(Clone, Serialize)]
+#[cfg(debug_assertions)]
 struct MouseEvent<'a> {
     position: &'a str,
     #[serde(rename = "type")]
