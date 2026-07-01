@@ -1,25 +1,31 @@
 <script>
-	import { createEventDispatcher, onMount } from "svelte";
-
-	/** @type {string[]} */
-	export let keyNames = [];
-	export let index = 0;
-	export let keyListLength = 1;
+	import { onMount } from "svelte";
 
 	
-	$: opacityRate = (index + 1) === keyListLength ? 1 : Math.max(0, 1 - (keyListLength - index) * 0.1) * 0.8;
+	/**
+	 * @typedef {Object} Props
+	 * @property {string[]} [keyNames]
+	 * @property {number} [index]
+	 * @property {number} [keyListLength]
+	 * @property {() => void} [onRemove]
+	 */
+
+	/** @type {Props} */
+	let { keyNames = [], index = 0, keyListLength = 1, onRemove = () => {} } = $props();
+
 	
-	const dispatch = createEventDispatcher();
+	let opacityRate = $derived((index + 1) === keyListLength ? 1 : Math.max(0, 1 - (keyListLength - index) * 0.1) * 0.8);
+	
 	const FADE_STATE_1 = 1;
 	const FADE_STATE_2 = 2;
 	const FADE_STATE_3 = 3;
 
 	/** @type {HTMLDivElement | null} */
-	let wrapperElement = null;
+	let wrapperElement = $state(null);
 
 	const MIDDLE_OPACITY = 0.7;
 	const MAX_OPACITY = 1;
-	let state = 0;
+	let fadeState = 0;
 
 	const ALL_DURATION = 2000;
 	const START_DELAY = 200;
@@ -28,7 +34,7 @@
 	const MIDDLE_DURATION = 600;
 	const DESTROY_DURATION = 320;
 
-	let opacity = 0;
+	let opacity = $state(0);
 
 	onMount(() => {
 		let count = 0;
@@ -44,21 +50,21 @@
 		})();
 	});
 
-	let duration = FADE_DURATION;
-	let delay = 0;
+	let duration = $state(FADE_DURATION);
+	let delay = $state(0);
 
 	const onChangeState = () => {
-		state++;
-		if (state === FADE_STATE_1) {
+		fadeState++;
+		if (fadeState === FADE_STATE_1) {
 			opacity = MIDDLE_OPACITY;
 			duration = MIDDLE_DURATION;
 			delay = START_DELAY;
-		} else if (state === FADE_STATE_2) {
+		} else if (fadeState === FADE_STATE_2) {
 			opacity = 0;
 			duration = DESTROY_DURATION;
 			delay = ALL_DURATION - START_DELAY - DESTROY_DURATION - FADE_DURATION - MIDDLE_DURATION;
-		} else if (state >= FADE_STATE_3) {
-			dispatch('remove');
+		} else if (fadeState >= FADE_STATE_3) {
+			onRemove();
 		}
 	};
 
@@ -67,7 +73,7 @@
 <div bind:this={wrapperElement} class="key-wrapper" style:--opacity={opacityRate}>
 	<div
 		class="key"
-		on:transitionend={onChangeState}
+		ontransitionend={onChangeState}
 		style:--transition-delay={delay}
 		style:--transition-duration={duration}
 		style:--opacity={opacity}

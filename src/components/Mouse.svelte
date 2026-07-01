@@ -1,4 +1,6 @@
 <script>
+	import { run } from 'svelte/legacy';
+
 	import { getAppBridge } from "$lib/scripts/app-bridge";
 	import { onDestroy, onMount } from "svelte";
 	import { writable } from "svelte/store";
@@ -40,9 +42,9 @@
 		}
 	};
 
-	let clog = (/** @type {any[]} */ ...args) => console.log(...args);
-	export let log = (/** @type {any[]} */ ...args) => console.log(...args);
-	$: {clog = log;}
+	let clog = $state((/** @type {any[]} */ ...args) => console.log(...args));
+	let { log = (/** @type {any[]} */ ...args) => console.log(...args) } = $props();
+	run(() => {clog = log;});
 
 	const size = 50;
 	const stroke = 2;

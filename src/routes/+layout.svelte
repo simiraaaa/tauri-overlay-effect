@@ -2,8 +2,15 @@
 	import { onMount } from 'svelte';
 	import './styles.css';
 	import { init } from '$lib/scripts/app';
+	/**
+	 * @typedef {Object} Props
+	 * @property {import('svelte').Snippet} [children]
+	 */
 
-	let initialized = false;
+	/** @type {Props} */
+	let { children } = $props();
+
+	let initialized = $state(false);
 	onMount(async () => {
 		await init();
 		initialized = true;
@@ -13,7 +20,7 @@
 <div class="app">
 	{#if initialized}
 		<main>
-			<slot />
+			{@render children?.()}
 		</main>
 	{/if}
 </div>

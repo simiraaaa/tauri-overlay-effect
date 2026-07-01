@@ -5,12 +5,12 @@
   import { onMount } from "svelte";
 
   /** @type {HTMLTextAreaElement | undefined} */
-  let textareaElement;
+  let textareaElement = $state();
   /** @type {AppBridge | undefined} */
   let appBridge;
-  $: lineNumber = $chapterIndex + 1;
+  let lineNumber = $derived($chapterIndex + 1);
   
-  let saved = false;
+  let saved = $state(false);
 
   onMount(async () => {
     appBridge = await getAppBridge();
@@ -51,7 +51,7 @@
   const debouncedSave = debounce(save, 250);
   const debouncedSaveIndex = debounce(saveIndex, 250);
 
-  $: chapterLine = $chapterText.split('\n')[lineNumber - 1];
+  let chapterLine = $derived($chapterText.split('\n')[lineNumber - 1]);
 </script>
 
 
@@ -60,12 +60,12 @@
   <div class="index-setting">
     <label class="f fm">
       表示する行:
-      <input type="number" bind:value={lineNumber} min="1" max="{$chapterText.split('\n').length}" on:input={onInputIndex}/>
+      <input type="number" bind:value={lineNumber} min="1" max="{$chapterText.split('\n').length}" oninput={onInputIndex}/>
     </label>
   </div>
   <div class="fs12">現在の表示:</div>
   <div class="fs14 bold"> {chapterLine}</div>
-  <textarea bind:this={textareaElement} on:input={onInput}></textarea>
+  <textarea bind:this={textareaElement} oninput={onInput}></textarea>
 </section>
 
 <style>

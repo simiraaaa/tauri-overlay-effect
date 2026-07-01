@@ -7,14 +7,14 @@
 	import { onDestroy, onMount } from "svelte";
 	
 	/** @type {string[]} */
-	let logs = [];
+	let logs = $state([]);
 
 	/**
 	 * @typedef {{ id: Symbol; names: string[] }} KeyParam
 	 */
 
 	/** @type {KeyParam[]} */
-	let keyParams = [];
+	let keyParams = $state([]);
 
 	/** @type {Set<string>} */
 	let pressedKeySet = new Set();
@@ -129,7 +129,7 @@
 		keyParams = keyParams.filter((p) => p.id !== param.id);
 	};
 
-	$: chapterLine = `${$chapterIndex + 1}. ` + $chapterText.split('\n')[$chapterIndex];
+	let chapterLine = $derived(`${$chapterIndex + 1}. ` + $chapterText.split('\n')[$chapterIndex]);
 
 </script>
 
@@ -151,7 +151,7 @@
 		</div>
 	{/if}
 
-	<!-- svelte-ignore missing-declaration -->
+	<!-- svelte-ignore missing_declaration -->
 	{#if isDev}
 		<div class="logs">
 			{#each logs.slice().reverse() as log}
@@ -169,7 +169,7 @@
 							keyNames={param.names}
 							index={i}
 							keyListLength={keyParams.length}
-							on:remove={() => onRemoveKeyboard(param)}
+							onremove={() => onRemoveKeyboard(param)}
 						/>
 					</div>
 				{/each}

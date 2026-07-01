@@ -1,17 +1,25 @@
 <script>
+	import { run } from 'svelte/legacy';
+
     import { chapterIndex } from "$lib/scripts/app";
 	import { getAppBridge } from "$lib/scripts/app-bridge";
 	import { debounce } from "$lib/scripts/util";
 	import { onMount } from "svelte";
 
-	export let text = '';
-	let appendingText = '';
+	/**
+	 * @typedef {Object} Props
+	 * @property {string} [text]
+	 */
+
+	/** @type {Props} */
+	let { text = '' } = $props();
+	let appendingText = $state('');
 	/** @type {AppBridge | undefined} */
 	let appBridge;
 
-	let hovered = false;
+	let hovered = $state(false);
 
-	let continuousHoverCount = 0;
+	let continuousHoverCount = $state(0);
 	// 3 往復ぐらいしたらページ切り替え
 	const TRIGGER_HOVER_COUNT = 6;
 
@@ -24,12 +32,12 @@
 		hovered = false;
 	};
 
-	$: {
+	run(() => {
 		text;
 		continuousHoverCount = 0;
 		hovered = false;
 		appendingText = '';
-	}
+	});
 
 	onMount(async () => {
 		appBridge = await getAppBridge();
@@ -74,8 +82,8 @@
 </script>
 
 {#key text}
-	<div class="wrapper" class:hovered on:mouseenter={onMouseEnter} on:mouseleave={onMouseLeave}>
-		<div class="chapter" on:mouseenter={onMouseEnterChapter}>
+	<div class="wrapper" class:hovered onmouseenter={onMouseEnter} onmouseleave={onMouseLeave}>
+		<div class="chapter" onmouseenter={onMouseEnterChapter}>
 			{text}
 			{#if appendingText}
 				<div class="appending-text">({appendingText})</div>

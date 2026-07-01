@@ -4,7 +4,7 @@ This repository is a Tauri v2 + Svelte migration prototype of the overlay effect
 This document is the public-facing setup and verification guide.
 
 ## Requirements
-- Node.js 18+
+- Node.js 20.19+
 - Rust (for Tauri)
 - macOS (minimum first-tier support)
 
