@@ -1,10 +1,13 @@
-use std::sync::Mutex;
-#[cfg(debug_assertions)]
+use serde::Serialize;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
-#[cfg(debug_assertions)]
 use std::time::Duration;
 
-use serde::Serialize;
+#[cfg(target_os = "macos")]
+use rdev::{listen, Button, Event, EventType};
 use tauri::{Emitter, Manager};
 
 #[derive(Default)]
@@ -32,11 +35,10 @@ struct ChapterIndexResult {
 }
 
 #[derive(Clone, Serialize)]
-#[cfg(debug_assertions)]
-struct MouseEvent<'a> {
-    position: &'a str,
+struct MouseEvent {
+    position: &'static str,
     #[serde(rename = "type")]
-    event_type: &'a str,
+    event_type: &'static str,
     x: i32,
     y: i32,
 }
@@ -120,6 +122,82 @@ fn last_chapter_index(text: &str) -> usize {
     text.lines().count().saturating_sub(1)
 }
 
+fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.emit("global-mouse", event);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_global_mouse_events(app: tauri::AppHandle) -> Result<(), String> {
+    let is_left_button_down = Arc::new(AtomicBool::new(false));
+    let cursor_position = Arc::new(Mutex::new((0i32, 0i32)));
+    let app_for_events = app.clone();
+
+    let is_left_button_down_for_events = Arc::clone(&is_left_button_down);
+    let cursor_position_for_events = Arc::clone(&cursor_position);
+
+    let listener = move |event: Event| {
+        match event.event_type {
+            EventType::MouseMove { x, y } => {
+                let x = x as i32;
+                let y = y as i32;
+                if let Ok(mut position) = cursor_position_for_events.lock() {
+                    *position = (x, y);
+                }
+
+                if is_left_button_down_for_events.load(Ordering::Relaxed) {
+                    emit_global_mouse_event(
+                        &app_for_events,
+                        MouseEvent {
+                            position: "left",
+                            event_type: "drag",
+                            x,
+                            y,
+                        },
+                    );
+                }
+            }
+            EventType::ButtonPress(Button::Left) => {
+                is_left_button_down.store(true, Ordering::Relaxed);
+                let (x, y) = cursor_position_for_events.lock().map(|position| *position).unwrap_or((0, 0));
+
+                emit_global_mouse_event(
+                    &app_for_events,
+                    MouseEvent {
+                        position: "left",
+                        event_type: "down",
+                        x,
+                        y,
+                    },
+                );
+            }
+            EventType::ButtonRelease(Button::Left) => {
+                is_left_button_down.store(false, Ordering::Relaxed);
+                let (x, y) = cursor_position_for_events.lock().map(|position| *position).unwrap_or((0, 0));
+
+                emit_global_mouse_event(
+                    &app_for_events,
+                    MouseEvent {
+                        position: "left",
+                        event_type: "up",
+                        x,
+                        y,
+                    },
+                );
+            }
+            _ => {}
+        }
+    };
+
+    listen(listener).map_err(|error| format!("{error:?}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn spawn_global_mouse_events(_app: tauri::AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(debug_assertions)]
 fn spawn_dummy_mouse_events(app: tauri::AppHandle) {
     thread::spawn(move || {
@@ -181,8 +259,13 @@ pub fn run() {
                 let _ = window.set_shadow(false);
             }
 
-            #[cfg(debug_assertions)]
-            spawn_dummy_mouse_events(app.handle().clone());
+            let app_handle = app.handle().clone();
+            if let Err(error) = spawn_global_mouse_events(app_handle.clone()) {
+                eprintln!("Failed to start global mouse monitoring: {error}");
+
+                #[cfg(debug_assertions)]
+                spawn_dummy_mouse_events(app_handle);
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
