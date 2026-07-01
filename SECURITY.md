@@ -6,8 +6,9 @@
 
 ## What we check
 - `npm audit` before releases
-- `npm run security:check` in CI or release preparation
+- `npm run security:check` before release prep
 - `npm run check` for TypeScript/Svelte issues
+- `npm run security:check:high` for every release cut
 
 ## Response
 - If a vulnerability is reported, first try non-breaking fixes (`npm run security:fix`).
