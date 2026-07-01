@@ -4,7 +4,7 @@
 	import Mouse from "$components/Mouse.svelte";
 	import { getAppBridge } from "$lib/scripts/app-bridge";
 	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_NAME_TO_DISPLAY_TEXT_MAP, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings } from "$lib/scripts/app";
-	import { onMount } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	
 	/** @type {string[]} */
 	let logs = [];
@@ -18,6 +18,8 @@
 
 	/** @type {Set<string>} */
 	let pressedKeySet = new Set();
+	/** @type {Array<() => void>} */
+	let unlisteners = [];
 
 	const log = (/** @type {any[]} */ ...args) => {
 		logs.push(...args);
@@ -26,8 +28,17 @@
 
 	onMount(async () => {
 		const appBridge = await getAppBridge();
-		appBridge.onLog(log);
-		appBridge.onGlobalKeyboard(keydownHandler);
+		const logUnlisten = await appBridge.onLog(log);
+		const keyboardUnlisten = await appBridge.onGlobalKeyboard(keydownHandler);
+		if (typeof logUnlisten === 'function') unlisteners.push(/** @type {() => void} */ (logUnlisten));
+		if (typeof keyboardUnlisten === 'function') unlisteners.push(/** @type {() => void} */ (keyboardUnlisten));
+	});
+
+	onDestroy(() => {
+		for (const unlisten of unlisteners) {
+			unlisten();
+		}
+		unlisteners = [];
 	});
 
 	const keydownHandler = (_e = {}, /** @type {GlobalKeyEvent} **/ e, /** @type {GlobalKeyDownMap} */ down) => {

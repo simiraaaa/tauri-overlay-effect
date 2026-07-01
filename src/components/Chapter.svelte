@@ -15,7 +15,7 @@
 	// 3 往復ぐらいしたらページ切り替え
 	const TRIGGER_HOVER_COUNT = 6;
 
-	// クリック透過時も mouse over 系のイベントは発火する
+	// Tauri のクリック透過は Electron の forward 相当が未確認のため、ホバー送りは後続フェーズで再設計する。
 	const onMouseEnter = () => {
 		hovered = true;
 	};

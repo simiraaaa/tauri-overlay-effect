@@ -117,6 +117,7 @@ fn last_chapter_index(text: &str) -> usize {
     text.lines().count().saturating_sub(1)
 }
 
+#[cfg(debug_assertions)]
 fn spawn_dummy_mouse_events(app: tauri::AppHandle) {
     thread::spawn(move || {
         let mut x = 160;
@@ -177,6 +178,7 @@ pub fn run() {
                 let _ = window.set_shadow(false);
             }
 
+            #[cfg(debug_assertions)]
             spawn_dummy_mouse_events(app.handle().clone());
             Ok(())
         })
