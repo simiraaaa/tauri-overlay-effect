@@ -4,11 +4,14 @@
   import { debounce } from "$lib/scripts/util";
   import { onMount } from "svelte";
 
-  /** @type {HTMLTextAreaElement | undefined} */
-  let textareaElement = $state();
-  /** @type {AppBridge | undefined} */
-  let appBridge;
-  let lineNumber = $derived($chapterIndex + 1);
+	/** @type {HTMLTextAreaElement | undefined} */
+	let textareaElement = $state();
+	/** @type {AppBridge | undefined} */
+	let appBridge;
+	let lineNumber = $state($chapterIndex + 1);
+	$effect(() => {
+		lineNumber = $chapterIndex + 1;
+	});
   
   let saved = $state(false);
 
@@ -48,10 +51,10 @@
     saved = true;
   };
 
-  const debouncedSave = debounce(save, 250);
-  const debouncedSaveIndex = debounce(saveIndex, 250);
+	const debouncedSave = debounce(save, 250);
+	const debouncedSaveIndex = debounce(saveIndex, 250);
 
-  let chapterLine = $derived($chapterText.split('\n')[lineNumber - 1]);
+	let chapterLine = $derived($chapterText.split('\n')[lineNumber - 1]);
 </script>
 
 

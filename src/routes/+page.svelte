@@ -2,6 +2,7 @@
 	import Chapter from "$components/Chapter.svelte";
 	import Keyboard from "$components/Keyboard.svelte";
 	import Mouse from "$components/Mouse.svelte";
+	import { dev } from '$app/environment';
 	import { getAppBridge } from "$lib/scripts/app-bridge";
 	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_NAME_TO_DISPLAY_TEXT_MAP, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings } from "$lib/scripts/app";
 	import { onDestroy, onMount } from "svelte";
@@ -144,15 +145,14 @@
 	<!-- チャプター -->
 	{#if $settings.enableChapter}
 		<div class="chapter-container">
-			<Chapter text="{chapterLine}"></Chapter>
+			<Chapter text={chapterLine}></Chapter>
 			{#if $settings.timerPaused}
 				<div class="paused">-- Paused --</div>
 			{/if}
 		</div>
 	{/if}
 
-	<!-- svelte-ignore missing_declaration -->
-	{#if isDev}
+	{#if dev}
 		<div class="logs">
 			{#each logs.slice().reverse() as log}
 				<div>{log}</div>
@@ -169,7 +169,7 @@
 							keyNames={param.names}
 							index={i}
 							keyListLength={keyParams.length}
-							onremove={() => onRemoveKeyboard(param)}
+							onRemove={() => onRemoveKeyboard(param)}
 						/>
 					</div>
 				{/each}
@@ -178,9 +178,9 @@
 		
 	</div>
 </section>
-{#if $settings.enableMouse}
-	<Mouse {log}></Mouse>
-{/if}
+	{#if $settings.enableMouse}
+		<Mouse log={log}></Mouse>
+	{/if}
 
 
 <style>

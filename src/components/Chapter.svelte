@@ -82,8 +82,8 @@
 </script>
 
 {#key text}
-	<div class="wrapper" class:hovered onmouseenter={onMouseEnter} onmouseleave={onMouseLeave}>
-		<div class="chapter" onmouseenter={onMouseEnterChapter}>
+	<div class="wrapper" class:hovered role="button" aria-label="chapter container" tabindex="-1" onmouseenter={onMouseEnter} onmouseleave={onMouseLeave}>
+		<div class="chapter" role="button" aria-label="chapter" tabindex="-1" onmouseenter={onMouseEnterChapter}>
 			{text}
 			{#if appendingText}
 				<div class="appending-text">({appendingText})</div>
