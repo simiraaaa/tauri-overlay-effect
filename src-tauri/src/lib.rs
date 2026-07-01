@@ -129,19 +129,102 @@ fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
 }
 
 #[cfg(target_os = "macos")]
+fn normalize_global_mouse_position(
+    app: &tauri::AppHandle,
+    raw_x: i32,
+    raw_y: i32,
+    last_position: &Arc<Mutex<(i32, i32)>>,
+) -> (i32, i32) {
+    let Some(window) = app.get_webview_window("main") else {
+        return (raw_x, raw_y);
+    };
+
+    let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+
+    let monitor = window
+        .monitor_from_point(raw_x as f64, raw_y as f64)
+        .ok()
+        .flatten()
+        .or_else(|| window.current_monitor().ok().flatten());
+
+    let Some(monitor) = monitor else {
+        return ((raw_x as f64 / scale).round() as i32, (raw_y as f64 / scale).round() as i32);
+    };
+
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let monitor_left = monitor_position.x as f64;
+    let monitor_top = monitor_position.y as f64;
+    let monitor_width = monitor_size.width as f64;
+    let monitor_height = monitor_size.height as f64;
+
+    let scaled_x = (raw_x as f64 - monitor_left) / scale;
+    let scaled_y_from_top = (raw_y as f64 - monitor_top) / scale;
+    let scaled_y_from_bottom = ((monitor_top + monitor_height) - raw_y as f64) / scale;
+
+    let top_candidate = (scaled_x.round() as i32, scaled_y_from_top.round() as i32);
+    let bottom_candidate = (scaled_x.round() as i32, scaled_y_from_bottom.round() as i32);
+
+    let mut x = bottom_candidate.0;
+    let mut y = bottom_candidate.1;
+
+    if let Ok((last_x, last_y)) = last_position.lock().map(|position| *position) {
+        let top_delta = (top_candidate.0 - last_x).abs() + (top_candidate.1 - last_y).abs();
+        let bottom_delta = (bottom_candidate.0 - last_x).abs() + (bottom_candidate.1 - last_y).abs();
+
+        if top_delta < bottom_delta {
+            x = top_candidate.0;
+            y = top_candidate.1;
+        }
+    }
+
+    let max_x = (monitor_width / scale).round() as i32;
+    let max_y = (monitor_height / scale).round() as i32;
+
+    if x < 0 {
+        x = 0;
+    }
+    if x > max_x {
+        x = max_x;
+    }
+    if y < 0 {
+        y = 0;
+    }
+    if y > max_y {
+        y = max_y;
+    }
+
+    let normalized = (x, y);
+    if let Ok(mut last) = last_position.lock() {
+        *last = normalized;
+    }
+
+    normalized
+}
+
+#[cfg(target_os = "macos")]
 fn spawn_global_mouse_events(app: tauri::AppHandle) -> Result<(), String> {
     let is_left_button_down = Arc::new(AtomicBool::new(false));
     let cursor_position = Arc::new(Mutex::new((0i32, 0i32)));
+    let normalized_position = Arc::new(Mutex::new((0i32, 0i32)));
     let app_for_events = app.clone();
 
     let is_left_button_down_for_events = Arc::clone(&is_left_button_down);
     let cursor_position_for_events = Arc::clone(&cursor_position);
+    let normalized_position_for_events = Arc::clone(&normalized_position);
+    let app_for_normalize_events = app_for_events.clone();
 
     let listener = move |event: Event| {
         match event.event_type {
             EventType::MouseMove { x, y } => {
                 let x = x as i32;
                 let y = y as i32;
+                let (x, y) = normalize_global_mouse_position(
+                    &app_for_normalize_events,
+                    x,
+                    y,
+                    &normalized_position_for_events,
+                );
                 if let Ok(mut position) = cursor_position_for_events.lock() {
                     *position = (x, y);
                 }

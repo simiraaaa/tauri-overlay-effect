@@ -21,7 +21,7 @@
         "width": 800,
         "height": 600,
         "resizable": false,
-        "fullscreen": false,
+        "fullscreen": true,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
