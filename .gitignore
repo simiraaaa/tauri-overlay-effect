@@ -14,7 +14,7 @@ vite.config.ts.timestamp-*
 /dist
 /ignore
 
-# Local planning notes
+# Local planning notes (public repo)
 tasks/
 
 # Tauri build artifacts
