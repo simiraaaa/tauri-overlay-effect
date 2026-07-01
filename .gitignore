@@ -1,0 +1,7 @@
+tasks/
+node_modules/
+.svelte-kit/
+build/
+dist/
+src-tauri/target/
+src-tauri/gen/

@@ -1,0 +1,32 @@
+{
+  "name": "tauri-overlay-effect",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Overlay effect app ported to Tauri v2 and Svelte.",
+  "scripts": {
+    "dev": "vite dev",
+    "dev:svelte": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@fontsource/fira-mono": "^4.5.10",
+    "@neoconfetti/svelte": "^1.0.0",
+    "@sveltejs/adapter-static": "^2.0.2",
+    "@sveltejs/kit": "^1.5.0",
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^20.0.0",
+    "svelte": "^3.54.0",
+    "svelte-check": "^3.0.1",
+    "typescript": "^5.0.0",
+    "vite": "^4.2.0"
+  }
+}
