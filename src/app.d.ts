@@ -1,25 +1,27 @@
 declare global {
+	type Unlisten = () => void;
+
 	namespace App {
 		// interface Error {}
 		// interface Locals {}
 		// interface PageData {}
 		// interface Platform {}
 	}
-	
+
 	var electron: AppBridge | undefined;
 	var appBridge: AppBridge | undefined;
 	var isDev: boolean;
 
 	type AppBridge = {
-		onGlobalKeyboard: (callback: (...args: any[]) => void) => unknown;
-		onLog: (callback: (...args: any[]) => void) => unknown;
-		onGlobalMouse: (callback: (...args: any[]) => void) => unknown;
-		onChangeMouseEnable: (callback: (enable: boolean) => void) => unknown;
-		onChangeKeyboardEnable: (callback: (enable: boolean) => void) => unknown;
-		onChangeChapterEnable: (callback: (enable: boolean) => void) => unknown;
-		onChangeTimerPaused: (callback: (paused: boolean) => void) => unknown;
-		onChangeChapterText: (callback: (text: string) => void) => unknown;
-		onChangeChapterIndex: (callback: (index: number) => void) => unknown;
+		onGlobalKeyboard: (callback: (event: unknown, keyEvent: GlobalKeyEvent, down: GlobalKeyDownMap) => void) => Unlisten | Promise<Unlisten>;
+		onLog: (callback: (...args: unknown[]) => void) => Unlisten | Promise<Unlisten>;
+		onGlobalMouse: (callback: (event: unknown, mouseEvent: GlobalMouseEvent) => void) => Unlisten | Promise<Unlisten>;
+		onChangeMouseEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
+		onChangeKeyboardEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
+		onChangeChapterEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
+		onChangeTimerPaused: (callback: (paused: boolean) => void) => Unlisten | Promise<Unlisten>;
+		onChangeChapterText: (callback: (text: string) => void) => Unlisten | Promise<Unlisten>;
+		onChangeChapterIndex: (callback: (index: number) => void) => Unlisten | Promise<Unlisten>;
 		getSettings: () => Promise<AppData.Settings>;
 		getChapterText: () => Promise<string>;
 		setChapterText: (text: string) => Promise<void>;
@@ -27,6 +29,12 @@ declare global {
 		setChapterIndex: (index: number) => Promise<{ last: number; index: number }>;
 		addChapterIndex: (num: number) => Promise<{ last: number; index: number }>;
 	};
+
+	interface GlobalMouseEvent {
+		type: 'down' | 'drag' | 'up' | string;
+		x: number;
+		y: number;
+	}
 
 	interface GlobalKeyDownMap {
 		[key: string]: boolean | undefined;

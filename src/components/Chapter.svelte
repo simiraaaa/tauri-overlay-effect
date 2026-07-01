@@ -1,21 +1,18 @@
-<script>
+<script lang="ts">
 	import { run } from 'svelte/legacy';
 
-    import { chapterIndex } from "$lib/scripts/app";
+	import { chapterIndex } from "$lib/scripts/app";
 	import { getAppBridge } from "$lib/scripts/app-bridge";
 	import { debounce } from "$lib/scripts/util";
 	import { onMount } from "svelte";
 
-	/**
-	 * @typedef {Object} Props
-	 * @property {string} [text]
-	 */
+	type Props = {
+		text?: string;
+	};
 
-	/** @type {Props} */
-	let { text = '' } = $props();
+	let { text = '' }: Props = $props();
 	let appendingText = $state('');
-	/** @type {AppBridge | undefined} */
-	let appBridge;
+	let appBridge: AppBridge | undefined;
 
 	let hovered = $state(false);
 
@@ -23,7 +20,6 @@
 	// 3 往復ぐらいしたらページ切り替え
 	const TRIGGER_HOVER_COUNT = 6;
 
-	// Tauri のクリック透過は Electron の forward 相当が未確認のため、ホバー送りは後続フェーズで再設計する。
 	const onMouseEnter = () => {
 		hovered = true;
 	};
@@ -43,34 +39,28 @@
 		appBridge = await getAppBridge();
 	});
 
-	/**
-	 * @param {MouseEvent} e
-	 */
-	const onMouseEnterChapter = async (e) => {
+	const onMouseEnterChapter = async (e: MouseEvent) => {
 		continuousHoverCount++;
 		if (continuousHoverCount >= TRIGGER_HOVER_COUNT) {
-			// 画面左なら 前へ
 			let num = -1;
 
-			// 画面右なら 次へ
 			if (e.clientX > window.innerWidth / 2) {
 				num = 1;
 			}
 			const current = $chapterIndex;
-			const bridge = appBridge || await getAppBridge();
-			const {index, last} = await bridge.addChapterIndex(num);
-			
+			const bridge = appBridge || (await getAppBridge());
+			if (!bridge) return;
+			const { index, last } = await bridge.addChapterIndex(num);
+
 			if (current === index) {
 				if (index <= 0) {
 					appendingText = '最初のチャプターです';
-				}
-				else if (index >= last) {
+				} else if (index >= last) {
 					appendingText = '最後のチャプターです';
 				}
 			}
 			continuousHoverCount = 0;
-		}
-		else {
+		} else {
 			resetContinuousHoverCount();
 		}
 	};
@@ -78,7 +68,6 @@
 	const resetContinuousHoverCount = debounce(() => {
 		continuousHoverCount = 0;
 	}, 300);
-	
 </script>
 
 {#key text}

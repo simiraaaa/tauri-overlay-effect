@@ -1,25 +1,23 @@
-<script>
+<script lang="ts">
   import { chapterIndex, chapterText } from "$lib/scripts/app";
   import { getAppBridge } from "$lib/scripts/app-bridge";
   import { debounce } from "$lib/scripts/util";
   import { onMount } from "svelte";
 
-	/** @type {HTMLTextAreaElement | undefined} */
-	let textareaElement = $state();
-	/** @type {AppBridge | undefined} */
-	let appBridge;
-	let lineNumber = $state($chapterIndex + 1);
-	$effect(() => {
-		lineNumber = $chapterIndex + 1;
-	});
-  
+	let textareaElement = $state<HTMLTextAreaElement | undefined>(undefined);
+	let appBridge: AppBridge | undefined;
+  let lineNumber = $state($chapterIndex + 1);
+  $effect(() => {
+    lineNumber = $chapterIndex + 1;
+  });
+
   let saved = $state(false);
 
   onMount(async () => {
     appBridge = await getAppBridge();
-    if (!textareaElement) return;
-    textareaElement.value = await appBridge.getChapterText(); 
-  })
+    if (!textareaElement || !appBridge) return;
+    textareaElement.value = await appBridge.getChapterText();
+  });
 
   const onInput = () => {
     saved = false;
@@ -31,22 +29,26 @@
     debouncedSaveIndex();
   };
 
-  const getFormattedText = () => {
+  const getFormattedText = (): string => {
     if (!textareaElement) return '';
-    return textareaElement.value.split('\n').map((line) => {
-      return line.trim();
-    }).filter(Boolean).join('\n');
+    return textareaElement.value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join('\n');
   };
 
   const save = async () => {
     const text = getFormattedText();
-    const bridge = appBridge || await getAppBridge();
+    const bridge = appBridge || (await getAppBridge());
+    if (!bridge) return;
     await bridge.setChapterText(text);
     saved = true;
   };
 
   const saveIndex = async () => {
-    const bridge = appBridge || await getAppBridge();
+    const bridge = appBridge || (await getAppBridge());
+    if (!bridge) return;
     await bridge.setChapterIndex(lineNumber - 1);
     saved = true;
   };
@@ -59,7 +61,7 @@
 
 
 <section>
-  <div class={saved ? "saved" : "not-saved"}>{ saved ? "保存済み" : "未保存" }</div>
+  <div class={saved ? "saved" : "not-saved"}>{saved ? "保存済み" : "未保存"}</div>
   <div class="index-setting">
     <label class="f fm">
       表示する行:
@@ -98,7 +100,7 @@
   .index-setting input {
     width: 40px;
     margin-left: 8px;
-  } 
+  }
 
   section {
     height: 100%;

@@ -1,19 +1,19 @@
 import adapter from '@sveltejs/adapter-static';
+import type { Config } from '@sveltejs/kit';
 
-/** @type {import('@sveltejs/kit').Config} */
-const config = {
+const config: Config = {
   kit: {
     adapter: adapter({
       pages: 'build',
       assets: 'build',
       fallback: null,
       precompress: false,
-      strict: true
+      strict: true,
     }),
     alias: {
-      $components: './src/components'
-    }
-  }
+      $components: './src/components',
+    },
+  },
 };
 
 export default config;

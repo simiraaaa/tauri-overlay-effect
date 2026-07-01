@@ -1,26 +1,27 @@
-<script>
+<script lang="ts">
 	import { onMount } from "svelte";
 
-	/**
-	 * @typedef {Object} Props
-	 * @property {string[]} [keyNames]
-	 * @property {number} [index]
-	 * @property {number} [keyListLength]
-	 * @property {() => void} [onRemove]
-	 */
+	type Props = {
+		keyNames?: string[];
+		index?: number;
+		keyListLength?: number;
+		onRemove?: () => void;
+	};
 
-	/** @type {Props} */
-	let { keyNames = [], index = 0, keyListLength = 1, onRemove = () => {} } = $props();
+	let {
+		keyNames = [],
+		index = 0,
+		keyListLength = 1,
+		onRemove = () => {},
+	}: Props = $props();
 
-	
 	let opacityRate = $derived((index + 1) === keyListLength ? 1 : Math.max(0, 1 - (keyListLength - index) * 0.1) * 0.8);
-	
+
 	const FADE_STATE_1 = 1;
 	const FADE_STATE_2 = 2;
 	const FADE_STATE_3 = 3;
 
-	/** @type {HTMLDivElement | null} */
-	let wrapperElement = $state(null);
+	let wrapperElement = $state<HTMLDivElement | null>(null);
 
 	const MIDDLE_OPACITY = 0.7;
 	const MAX_OPACITY = 1;
@@ -39,7 +40,7 @@
 		let count = 0;
 		(function f() {
 			requestAnimationFrame(() => {
-				if (++count > 10) return ;
+				if (++count > 10) return;
 				if (wrapperElement?.offsetParent) {
 					opacity = MAX_OPACITY;
 				} else {
@@ -66,7 +67,6 @@
 			onRemove();
 		}
 	};
-
 </script>
 
 <div bind:this={wrapperElement} class="key-wrapper" style:--opacity={opacityRate}>

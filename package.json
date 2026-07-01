@@ -9,7 +9,7 @@
     "dev:svelte": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "security:check": "npm audit",
     "security:check:high": "npm audit --audit-level=high",
     "security:fix": "npm audit fix",

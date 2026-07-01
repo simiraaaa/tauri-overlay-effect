@@ -1,19 +1,24 @@
-<script>
+<script lang="ts">
 	import { getAppBridge } from "$lib/scripts/app-bridge";
 	import { onDestroy, onMount } from "svelte";
 	import { writable } from "svelte/store";
 
-	let x = writable(0);
-	let y = writable(0);
+	type GlobalMouseEvent = {
+		type: 'down' | 'drag' | 'up' | string;
+		x: number;
+		y: number;
+	};
+
+	const x = writable(0);
+	const y = writable(0);
 	let _visible = false;
 	let _time = 0;
-	/** @type {NodeJS.Timeout | null} */
-	let _timeout_id = null;
-	let visible = writable(false);
+	let _timeout_id: ReturnType<typeof setTimeout> | null = null;
+	const visible = writable(false);
 	// 最低でも 3 フレーム分は表示する
 	const MIN_VISIBLE_TIME = 1000 / 60 * 3;
 
-	const onGlobalMouse = (/** @type {any} */ _e,/** @type {any} */ mouse) => {
+	const onGlobalMouse = (_e: unknown, mouse: GlobalMouseEvent): void => {
 		if (mouse.type === 'down' || mouse.type === 'drag') {
 			x.set(Math.floor(mouse.x));
 			y.set(Math.floor(mouse.y));
@@ -21,7 +26,6 @@
 				_time = performance.now();
 				visible.set(_visible = true);
 			}
-			// clog?.(JSON.stringify(mouse, null, '  '));
 		} else {
 			if (performance.now() - _time > MIN_VISIBLE_TIME) {
 				if (_timeout_id) {
@@ -40,28 +44,25 @@
 		}
 	};
 
-	/**
-	 * @param {...any} args
-	 */
-	const defaultLog = (...args) => {
+	const defaultLog = (...args: unknown[]) => {
 		console.log(...args);
 	};
-	/**
-	 * @typedef {Object} Props
-	 * @property {(...args: any[]) => void} log
-	 */
-	let { log = defaultLog } = $props();
+
+	type Props = {
+		log?: (...args: unknown[]) => void;
+	};
+	let { log = defaultLog }: Props = $props();
 
 	const size = 50;
 	const stroke = 2;
-	/** @type {(() => void) | null} */
-	let unlisten = null;
+	let unlisten: (() => void) | null = null;
 
 	onMount(async () => {
 		const appBridge = await getAppBridge();
+		if (!appBridge) return;
 		const cleanup = await appBridge.onGlobalMouse(onGlobalMouse);
 		if (typeof cleanup === 'function') {
-			unlisten = /** @type {() => void} */ (cleanup);
+			unlisten = cleanup;
 		}
 	});
 
@@ -70,12 +71,10 @@
 			unlisten();
 		}
 	});
-
 </script>
 
-
 <div class="overlay"
-	style:--size={size}px 
+	style:--size={size}px
 	style:--size-wrap={size + stroke}px
 	style:--stroke={stroke}px
 	style:--stroke-wrap={stroke * 2}px

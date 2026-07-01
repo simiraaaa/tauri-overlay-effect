@@ -1,14 +1,10 @@
-<script>
+<script lang="ts">
 	import { onMount } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import './styles.css';
 	import { init } from '$lib/scripts/app';
-	/**
-	 * @typedef {Object} Props
-	 * @property {import('svelte').Snippet} [children]
-	 */
 
-	/** @type {Props} */
-	let { children } = $props();
+	let { children }: { children: Snippet | undefined } = $props();
 
 	let initialized = $state(false);
 	onMount(async () => {

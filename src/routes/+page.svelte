@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import Chapter from "$components/Chapter.svelte";
 	import Keyboard from "$components/Keyboard.svelte";
 	import Mouse from "$components/Mouse.svelte";
@@ -6,33 +6,30 @@
 	import { getAppBridge } from "$lib/scripts/app-bridge";
 	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_NAME_TO_DISPLAY_TEXT_MAP, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings } from "$lib/scripts/app";
 	import { onDestroy, onMount } from "svelte";
-	
-	/** @type {string[]} */
-	let logs = $state([]);
 
-	/**
-	 * @typedef {{ id: Symbol; names: string[] }} KeyParam
-	 */
+	type KeyParam = {
+		id: Symbol;
+		names: string[];
+	};
 
-	/** @type {KeyParam[]} */
-	let keyParams = $state([]);
+	let logs = $state<unknown[]>([]);
+	let keyParams = $state<KeyParam[]>([]);
+	let pressedKeySet = $state(new Set<string>());
+	let unlisteners = $state<(() => void)[]>([]);
 
-	/** @type {Set<string>} */
-	let pressedKeySet = new Set();
-	/** @type {Array<() => void>} */
-	let unlisteners = [];
-
-	const log = (/** @type {any[]} */ ...args) => {
+	const log = (...args: unknown[]) => {
 		logs.push(...args);
 		logs = logs.slice(-60);
 	};
 
 	onMount(async () => {
 		const appBridge = await getAppBridge();
+		if (!appBridge) return;
+
 		const logUnlisten = await appBridge.onLog(log);
 		const keyboardUnlisten = await appBridge.onGlobalKeyboard(keydownHandler);
-		if (typeof logUnlisten === 'function') unlisteners.push(/** @type {() => void} */ (logUnlisten));
-		if (typeof keyboardUnlisten === 'function') unlisteners.push(/** @type {() => void} */ (keyboardUnlisten));
+		if (typeof logUnlisten === 'function') unlisteners.push(logUnlisten);
+		if (typeof keyboardUnlisten === 'function') unlisteners.push(keyboardUnlisten);
 	});
 
 	onDestroy(() => {
@@ -42,17 +39,15 @@
 		unlisteners = [];
 	});
 
-	const keydownHandler = (_e = {}, /** @type {GlobalKeyEvent} **/ e, /** @type {GlobalKeyDownMap} */ down) => {
-		if (!$settings.enableKeyboard) return ;
-		
-		// log(`_raw: ${e._raw}, vKey: ${e.vKey}, name: ${e.name}, scanCode: ${e.scanCode}, rawKey._nameRaw: ${e.rawKey?._nameRaw}, rawKey.name: ${e.rawKey?.name}`);
-		// skip mouse
+	const keydownHandler = (_e: unknown, e: GlobalKeyEvent, _down: GlobalKeyDownMap) => {
+		if (!$settings.enableKeyboard) return;
+
 		if (e.name?.startsWith('MOUSE')) {
 			return;
 		}
+
 		const display_key = toDisplayKeyName(e.rawKey?.name);
-		if (e.state === 'DOWN'){
-			// pushKeys(e.rawKey?.name);
+		if (e.state === 'DOWN') {
 			pressedKeySet.add(display_key);
 			let key_display_threshold = 2;
 			if (pressedKeySet.has(KEY_CONSTANTS.shift)) {
@@ -84,19 +79,15 @@
 		}
 	};
 
-	/** @type {(keys: string[]) => void} */
-	const pushKeys = (keys = []) => {
+	const pushKeys = (keys: string[] = []) => {
 		keyParams.push({
 			id: Symbol(),
 			names: keys,
 		});
 		keyParams = keyParams.slice(-10);
-		keyParams = keyParams;
 	};
 
-	/** @type {(keys: string[]) => boolean} */
-	const isDisplayable = (keys = []) => {
-		// shift を除く
+	const isDisplayable = (keys: string[] = []) => {
 		let has_modifier_key = false;
 		let has_other_key = false;
 		let has_function_key = false;
@@ -116,22 +107,19 @@
 		return has_function_key || (has_modifier_key && has_other_key);
 	};
 
-	const toDisplayKeyName = (key = '') => {
-		// 暫定対応
-		const text = KEY_NAME_TO_DISPLAY_TEXT_MAP[key]
+	const toDisplayKeyName = (key = ''): string => {
+		const text = KEY_NAME_TO_DISPLAY_TEXT_MAP[key];
 		if (text) {
 			return text;
 		}
 		return key;
 	};
 
-	/** @type {(param: KeyParam) => void} */
-	const onRemoveKeyboard = (param) => {
+	const onRemoveKeyboard = (param: KeyParam) => {
 		keyParams = keyParams.filter((p) => p.id !== param.id);
 	};
 
 	let chapterLine = $derived(`${$chapterIndex + 1}. ` + $chapterText.split('\n')[$chapterIndex]);
-
 </script>
 
 <!-- <svelte:window on:keydown={onKeydown}></svelte:window> -->
@@ -142,7 +130,6 @@
 </svelte:head>
 
 <section>
-	<!-- チャプター -->
 	{#if $settings.enableChapter}
 		<div class="chapter-container">
 			<Chapter text={chapterLine}></Chapter>
@@ -161,11 +148,10 @@
 	{/if}
 	<div>
 		{#if $settings.enableKeyboard}
-			<!-- 一番最後のキーが真ん中に表示されるようにする -->
 			<div class="key-view-container">
 				{#each keyParams as param, i (param.id)}
 					<div class="key-item">
-						<Keyboard 
+						<Keyboard
 							keyNames={param.names}
 							index={i}
 							keyListLength={keyParams.length}
@@ -175,7 +161,7 @@
 				{/each}
 			</div>
 		{/if}
-		
+
 	</div>
 </section>
 	{#if $settings.enableMouse}
@@ -226,8 +212,6 @@
 		display: flex;
 		justify-content: center;
 		align-items: center;
-		flex-shrink: 0;
-		flex-grow: 1;
 	}
 
 	.chapter-container {
