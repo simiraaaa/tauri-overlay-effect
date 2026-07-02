@@ -13,13 +13,20 @@ pub fn set_listen_paused(paused: bool) {
     LISTEN_PAUSED.store(paused, Ordering::SeqCst);
 }
 
+fn is_keyboard_event(event_type: CGEventType) -> bool {
+    matches!(
+        event_type,
+        CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged
+    )
+}
+
 unsafe extern "C" fn raw_callback(
     _proxy: CGEventTapProxy,
     _type: CGEventType,
     cg_event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
-    if LISTEN_PAUSED.load(Ordering::SeqCst) {
+    if LISTEN_PAUSED.load(Ordering::SeqCst) && is_keyboard_event(_type) {
         return cg_event;
     }
 

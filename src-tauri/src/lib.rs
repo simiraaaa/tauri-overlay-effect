@@ -224,7 +224,9 @@ fn get_input_monitoring_status(state: tauri::State<'_, Mutex<AppState>>) -> Inpu
 
 #[tauri::command]
 fn retry_input_monitoring(app: tauri::AppHandle) -> Result<(), String> {
-    set_chapter_input_paused_inner(&app, false);
+    if !CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
+        set_chapter_input_paused_inner(&app, false);
+    }
     start_global_input_monitoring(app);
     Ok(())
 }
@@ -242,9 +244,9 @@ fn set_chapter_input_paused_inner(app: &tauri::AppHandle, paused: bool) {
     let status = if paused {
         InputMonitoringStatus {
             state: "disabled",
-            message: "Global input monitoring is paused while editing chapter settings.".to_string(),
+            message: "Keyboard input monitoring is paused after opening chapter settings.".to_string(),
             guidance: Some(
-                "Close the chapter settings window, then use the tray menu to retry input monitoring when you want to resume input effects.".to_string(),
+                "Use the tray menu to retry mouse monitoring after closing chapter settings. Restart the app to re-enable keyboard input monitoring safely.".to_string(),
             ),
             can_retry: true,
         }
