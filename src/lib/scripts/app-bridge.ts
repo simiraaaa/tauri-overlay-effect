@@ -52,7 +52,7 @@ export const getAppBridge = async (): Promise<AppBridge | undefined> => {
 
 const createAppBridge = async (): Promise<AppBridge> => {
   if (globalThis.electron) {
-    return globalThis.electron;
+    return withBridgeFallbacks(globalThis.electron);
   }
 
   if (isTauriRuntime()) {
@@ -60,6 +60,13 @@ const createAppBridge = async (): Promise<AppBridge> => {
   }
 
   return noopBridge;
+};
+
+const withBridgeFallbacks = (bridge: Partial<AppBridge>): AppBridge => {
+  return {
+    ...noopBridge,
+    ...bridge,
+  };
 };
 
 const isTauriRuntime = (): boolean => {

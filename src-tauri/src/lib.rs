@@ -1104,7 +1104,7 @@ fn start_global_input_monitoring(app: tauri::AppHandle) {
                     state: "waiting",
                     message: "Global input monitoring has not received any input events yet.".to_string(),
                     guidance: Some(
-                        "Move the mouse or press a key to confirm monitoring. If effects do not appear, allow this app in macOS System Settings > Privacy & Security > Accessibility and Input Monitoring."
+                        "Move the mouse or press a key to confirm monitoring. If effects do not appear, allow this app in macOS System Settings > Privacy & Security > Accessibility and Input Monitoring, then restart the app."
                             .to_string(),
                     ),
                     can_retry: false,
