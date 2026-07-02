@@ -391,25 +391,33 @@ fn emit_menu_error(app: &tauri::AppHandle, message: &str) {
     emit_log(app, message);
 }
 
-fn toggle_mouse_enabled(app: &tauri::AppHandle) {
+fn toggle_mouse_enabled(app: &tauri::AppHandle) -> Option<bool> {
     match update_persisted_settings(app, |settings| {
         settings.enable_mouse = !settings.enable_mouse;
     }) {
         Ok(settings) => {
             let _ = app.emit("change-mouse-enable", settings.enable_mouse);
+            Some(settings.enable_mouse)
         }
-        Err(error) => emit_menu_error(app, &format!("Failed to toggle mouse effects: {error}")),
+        Err(error) => {
+            emit_menu_error(app, &format!("Failed to toggle mouse effects: {error}"));
+            None
+        }
     }
 }
 
-fn toggle_keyboard_enabled(app: &tauri::AppHandle) {
+fn toggle_keyboard_enabled(app: &tauri::AppHandle) -> Option<bool> {
     match update_persisted_settings(app, |settings| {
         settings.enable_keyboard = !settings.enable_keyboard;
     }) {
         Ok(settings) => {
             let _ = app.emit("change-keyboard-enable", settings.enable_keyboard);
+            Some(settings.enable_keyboard)
         }
-        Err(error) => emit_menu_error(app, &format!("Failed to toggle keyboard effects: {error}")),
+        Err(error) => {
+            emit_menu_error(app, &format!("Failed to toggle keyboard effects: {error}"));
+            None
+        }
     }
 }
 
@@ -463,8 +471,12 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
         MENU_TOGGLE_OVERLAY => {
             let _ = toggle_overlay_visibility(app);
         }
-        MENU_TOGGLE_MOUSE => toggle_mouse_enabled(app),
-        MENU_TOGGLE_KEYBOARD => toggle_keyboard_enabled(app),
+        MENU_TOGGLE_MOUSE => {
+            let _ = toggle_mouse_enabled(app);
+        }
+        MENU_TOGGLE_KEYBOARD => {
+            let _ = toggle_keyboard_enabled(app);
+        }
         MENU_RETRY_INPUT_MONITORING => start_global_input_monitoring(app.clone()),
         MENU_QUIT => app.exit(0),
         _ => {}
@@ -511,12 +523,28 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     let toggle_overlay_for_menu = toggle_overlay.clone();
+    let mouse_enabled_for_menu = mouse_enabled.clone();
+    let keyboard_enabled_for_menu = keyboard_enabled.clone();
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
         .on_menu_event(move |app, event| {
             if event.id().as_ref() == MENU_TOGGLE_OVERLAY {
                 if let Some(visible) = toggle_overlay_visibility(app) {
                     let _ = toggle_overlay_for_menu.set_checked(visible);
+                }
+                return;
+            }
+
+            if event.id().as_ref() == MENU_TOGGLE_MOUSE {
+                if let Some(enabled) = toggle_mouse_enabled(app) {
+                    let _ = mouse_enabled_for_menu.set_checked(enabled);
+                }
+                return;
+            }
+
+            if event.id().as_ref() == MENU_TOGGLE_KEYBOARD {
+                if let Some(enabled) = toggle_keyboard_enabled(app) {
+                    let _ = keyboard_enabled_for_menu.set_checked(enabled);
                 }
                 return;
             }
