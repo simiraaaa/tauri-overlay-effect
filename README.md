@@ -142,3 +142,7 @@ npm run tauri:build:macos
 - Some lower-level warnings from vendored native input dependencies remain during Rust builds.
 - Global input monitoring depends on macOS permission state and may require manual permission reset after reinstalling or rebuilding.
 - Chapter-related UI from the original app is experimental and not part of the current public feature set.
+
+## Migration readiness
+
+The macOS-first migration gate and manual QA checklist are maintained in [docs/migration-readiness.md](docs/migration-readiness.md).
