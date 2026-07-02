@@ -40,6 +40,7 @@ struct AppState {
     data: PersistedState,
     overlay_visible: bool,
     input_monitoring_status: InputMonitoringStatus,
+    input_monitoring_attempt: u64,
 }
 
 impl Default for AppState {
@@ -54,6 +55,7 @@ impl Default for AppState {
                 guidance: None,
                 can_retry: false,
             },
+            input_monitoring_attempt: 0,
         }
     }
 }
@@ -709,6 +711,30 @@ fn emit_input_monitoring_status(app: &tauri::AppHandle, status: InputMonitoringS
     }
 }
 
+fn current_input_monitoring_state(app: &tauri::AppHandle) -> Option<&'static str> {
+    app.state::<Mutex<AppState>>()
+        .lock()
+        .ok()
+        .map(|state| state.input_monitoring_status.state)
+}
+
+fn next_input_monitoring_attempt(app: &tauri::AppHandle) -> u64 {
+    match app.state::<Mutex<AppState>>().lock() {
+        Ok(mut state) => {
+            state.input_monitoring_attempt = state.input_monitoring_attempt.saturating_add(1);
+            state.input_monitoring_attempt
+        }
+        Err(_) => 0,
+    }
+}
+
+fn current_input_monitoring_attempt(app: &tauri::AppHandle) -> u64 {
+    app.state::<Mutex<AppState>>()
+        .lock()
+        .map(|state| state.input_monitoring_attempt)
+        .unwrap_or_default()
+}
+
 fn overlay_desktop_bounds(window: &tauri::WebviewWindow) -> Option<OverlayBounds> {
     let monitors = window.available_monitors().ok()?;
     let mut monitors = monitors.iter();
@@ -1079,6 +1105,8 @@ fn start_global_input_monitoring(app: tauri::AppHandle) {
         return;
     }
 
+    let attempt = next_input_monitoring_attempt(&app);
+
     emit_input_monitoring_status(
         &app,
         InputMonitoringStatus {
@@ -1097,7 +1125,10 @@ fn start_global_input_monitoring(app: tauri::AppHandle) {
 
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_secs(4));
-        if !event_seen_for_watchdog.load(Ordering::SeqCst) {
+        if !event_seen_for_watchdog.load(Ordering::SeqCst)
+            && current_input_monitoring_attempt(&watchdog_app) == attempt
+            && current_input_monitoring_state(&watchdog_app) == Some("starting")
+        {
             emit_input_monitoring_status(
                 &watchdog_app,
                 InputMonitoringStatus {
