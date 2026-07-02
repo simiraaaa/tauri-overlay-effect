@@ -38,6 +38,7 @@ const MENU_RETRY_INPUT_MONITORING: &str = "retry-input-monitoring";
 const MENU_QUIT: &str = "quit";
 
 static INPUT_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
+static CHAPTER_SETTING_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 struct AppState {
     storage_path: Option<PathBuf>,
@@ -783,6 +784,8 @@ fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn set_chapter_setting_visible_inner(app: &tauri::AppHandle, visible: bool) -> Result<(), String> {
+    CHAPTER_SETTING_VISIBLE.store(visible, Ordering::SeqCst);
+
     {
         let state = app.state::<Mutex<AppState>>();
         let mut state = state.lock().map_err(|error| error.to_string())?;
@@ -1256,6 +1259,13 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                         can_retry: false,
                     },
                 );
+            }
+
+            if CHAPTER_SETTING_VISIBLE.load(Ordering::SeqCst) {
+                is_button_down_for_events.store(false, Ordering::Relaxed);
+                let _ = pressed_keys_for_events.lock().map(|mut down| down.clear());
+                let _ = active_key_names_for_events.lock().map(|mut active| active.clear());
+                return;
             }
 
             match event.event_type {
