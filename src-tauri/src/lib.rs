@@ -753,8 +753,10 @@ fn normalize_global_mouse_position(
     let monitor_offset_y = (monitor.y - desktop.y) as f64;
 
     let scaled_x = monitor_offset_x + raw_x as f64 - monitor_left;
-    let scaled_y_from_top = monitor_offset_y + raw_y as f64 - monitor_top;
-    let scaled_y_from_bottom = monitor_offset_y + (monitor_top + monitor_height) - raw_y as f64;
+    let top_local_y = raw_y as f64 - monitor_top;
+    let bottom_local_y = monitor_height - top_local_y;
+    let scaled_y_from_top = monitor_offset_y + top_local_y;
+    let scaled_y_from_bottom = monitor_offset_y + bottom_local_y;
 
     let top_candidate = (scaled_x.round() as i32, scaled_y_from_top.round() as i32);
     let bottom_candidate = (scaled_x.round() as i32, scaled_y_from_bottom.round() as i32);
