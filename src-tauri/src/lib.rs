@@ -1011,6 +1011,10 @@ fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
 }
 
 fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap<String, bool>) {
+    if is_chapter_setting_focused(app) {
+        return;
+    }
+
     let payload = (event, down);
     if let Some(window) = app.get_webview_window("main") {
         if window.emit("global-key", &payload).is_ok() {
@@ -1021,6 +1025,12 @@ fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap
     if let Err(error) = app.emit("global-key", payload) {
         eprintln!("Failed to emit global keyboard event: {error:?}");
     }
+}
+
+fn is_chapter_setting_focused(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL)
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false)
 }
 
 fn emit_log(app: &tauri::AppHandle, message: &str) {
