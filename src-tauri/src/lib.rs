@@ -40,6 +40,7 @@ const CHAPTER_SETTING_WINDOW_LABEL: &str = "chapter-setting";
 const CHAPTER_SETTING_ROUTE: &str = "chapter-setting";
 
 static INPUT_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
+static CHAPTER_SETTING_OPENED: AtomicBool = AtomicBool::new(false);
 
 struct AppState {
     storage_path: Option<PathBuf>,
@@ -766,6 +767,8 @@ fn copy_chapter_lap_text(app: &tauri::AppHandle) {
 }
 
 fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
+    CHAPTER_SETTING_OPENED.store(true, Ordering::SeqCst);
+
     if let Some(window) = app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
@@ -1326,6 +1329,10 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyPress(key) => {
+                    if CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
+                        return;
+                    }
+
                     let keyboard_layout = update_keyboard_layout(
                         &detected_keyboard_layout_for_events,
                         key,
@@ -1355,6 +1362,10 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyRelease(key) => {
+                    if CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
+                        return;
+                    }
+
                     let keyboard_layout = update_keyboard_layout(
                         &detected_keyboard_layout_for_events,
                         key,
