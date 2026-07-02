@@ -106,6 +106,8 @@ Build outputs are created under:
 
 DMG creation uses macOS `hdiutil`. It may fail inside restricted sandbox environments even when it succeeds in a normal local terminal.
 
+GitHub Release distribution steps are maintained in [docs/release.md](docs/release.md).
+
 ## Signing and notarization
 
 The repository does not store signing certificates, API keys, app-specific passwords, keychains, or provisioning profiles.
