@@ -1,5 +1,6 @@
 declare global {
 	type Unlisten = () => void;
+	type KeyboardLayout = 'unknown' | 'jis' | 'us';
 
 	namespace App {
 		// interface Error {}
@@ -43,6 +44,7 @@ declare global {
 	interface GlobalKeyEvent {
 		name?: string;
 		state?: 'DOWN' | 'UP' | string;
+		keyboardLayout?: KeyboardLayout;
 		rawKey?: {
 			name?: string;
 			_nameRaw?: string;

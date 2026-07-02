@@ -4,7 +4,7 @@
 	import Mouse from "$components/Mouse.svelte";
 	import { dev } from '$app/environment';
 	import { getAppBridge } from "$lib/scripts/app-bridge";
-	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_NAME_TO_DISPLAY_TEXT_MAP, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings } from "$lib/scripts/app";
+	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings, toDisplayKeyName } from "$lib/scripts/app";
 	import { onDestroy, onMount } from "svelte";
 
 	type KeyParam = {
@@ -16,6 +16,12 @@
 	let keyParams = $state<KeyParam[]>([]);
 	let pressedKeySet = $state(new Set<string>());
 	let unlisteners = $state<(() => void)[]>([]);
+	let keyboardLayout = $state<KeyboardLayout>('unknown');
+	let pressedKeyIdleTimer: ReturnType<typeof setTimeout> | undefined;
+	let ignoredStaleDownKeys = new Set<string>();
+	let lastDownKeys = new Set<string>();
+
+	const PRESSED_KEY_IDLE_RESET_MS = 2500;
 
 	const log = (...args: unknown[]) => {
 		logs.push(...args);
@@ -33,6 +39,7 @@
 	});
 
 	onDestroy(() => {
+		clearPressedKeyIdleTimer();
 		for (const unlisten of unlisteners) {
 			unlisten();
 		}
@@ -46,9 +53,14 @@
 			return;
 		}
 
-		const display_key = toDisplayKeyName(e.rawKey?.name);
+		keyboardLayout = e.keyboardLayout || keyboardLayout;
+		schedulePressedKeyIdleReset();
+
+		const rawKeyName = e.rawKey?.name || '';
+		const display_key = toDisplayKeyName(rawKeyName, keyboardLayout);
 		if (e.state === 'DOWN') {
-			syncPressedKeys(down);
+			ignoredStaleDownKeys.delete(rawKeyName);
+			syncPressedKeys(down, keyboardLayout);
 			pressedKeySet.add(display_key);
 			let key_display_threshold = 2;
 			if (pressedKeySet.has(KEY_CONSTANTS.shift)) {
@@ -60,7 +72,7 @@
 				}
 			}
 			if (pressedKeySet.size >= key_display_threshold) {
-				const display_keys = [...pressedKeySet].map(toDisplayKeyName).sort((a, b) => {
+				const display_keys = [...pressedKeySet].map((key) => toDisplayKeyName(key, keyboardLayout)).sort((a, b) => {
 					let ap = Infinity;
 					let bp = Infinity;
 					if (a in KEY_PRIORITIES) {
@@ -76,21 +88,46 @@
 				}
 			}
 		} else if (e.state === 'UP') {
-			if (!syncPressedKeys(down)) {
+			ignoredStaleDownKeys.delete(rawKeyName);
+			if (!syncPressedKeys(down, keyboardLayout)) {
 				pressedKeySet.delete(display_key);
 			}
 		}
 	};
 
-	const syncPressedKeys = (down: GlobalKeyDownMap) => {
+	const syncPressedKeys = (down: GlobalKeyDownMap, layout: KeyboardLayout) => {
 		if (!down || typeof down !== 'object') return false;
 
-		pressedKeySet = new Set(
+		lastDownKeys = new Set(
 			Object.entries(down)
 				.filter(([, pressed]) => pressed)
-				.map(([key]) => toDisplayKeyName(key)),
+				.map(([key]) => key),
+		);
+
+		pressedKeySet = new Set(
+			[...lastDownKeys]
+				.filter((key) => !ignoredStaleDownKeys.has(key))
+				.map((key) => toDisplayKeyName(key, layout)),
 		);
 		return true;
+	};
+
+	const clearPressedKeyIdleTimer = () => {
+		if (pressedKeyIdleTimer) {
+			clearTimeout(pressedKeyIdleTimer);
+			pressedKeyIdleTimer = undefined;
+		}
+	};
+
+	const schedulePressedKeyIdleReset = () => {
+		clearPressedKeyIdleTimer();
+		pressedKeyIdleTimer = setTimeout(() => {
+			ignoredStaleDownKeys = new Set(
+				[...lastDownKeys].filter((key) => !MODIFIER_KEYS.has(toDisplayKeyName(key, keyboardLayout))),
+			);
+			pressedKeySet = new Set();
+			pressedKeyIdleTimer = undefined;
+		}, PRESSED_KEY_IDLE_RESET_MS);
 	};
 
 	const pushKeys = (keys: string[] = []) => {
@@ -119,14 +156,6 @@
 		});
 
 		return has_function_key || (has_modifier_key && has_other_key);
-	};
-
-	const toDisplayKeyName = (key = ''): string => {
-		const text = KEY_NAME_TO_DISPLAY_TEXT_MAP[key];
-		if (text) {
-			return text;
-		}
-		return key;
 	};
 
 	const onRemoveKeyboard = (param: KeyParam) => {

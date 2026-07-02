@@ -61,8 +61,18 @@ struct RawKey {
 struct KeyEvent {
     name: String,
     state: &'static str,
+    #[serde(rename = "keyboardLayout")]
+    keyboard_layout: KeyboardLayout,
     #[serde(rename = "rawKey")]
     raw_key: RawKey,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum KeyboardLayout {
+    Unknown,
+    Jis,
+    Us,
 }
 
 #[tauri::command]
@@ -252,6 +262,7 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
     let normalized_position = Arc::new(Mutex::new((0i32, 0i32)));
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
+    let detected_keyboard_layout = Arc::new(Mutex::new(KeyboardLayout::Unknown));
     let app_for_events = app.clone();
 
     let is_button_down_for_events = Arc::clone(&is_button_down);
@@ -259,6 +270,7 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
     let normalized_position_for_events = Arc::clone(&normalized_position);
     let pressed_keys_for_events = Arc::clone(&pressed_keys);
     let active_key_names_for_events = Arc::clone(&active_key_names);
+    let detected_keyboard_layout_for_events = Arc::clone(&detected_keyboard_layout);
     let app_for_normalize_events = app_for_events.clone();
 
     let listener = move |event: Event| {
@@ -333,6 +345,11 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyPress(key) => {
+                    let keyboard_layout = update_keyboard_layout(
+                        &detected_keyboard_layout_for_events,
+                        key,
+                        event.name.as_ref(),
+                    );
                     let (name, name_raw) = key_name_for_event(event.name.as_ref(), key);
                     let _ = active_key_names_for_events.lock().map(|mut active| {
                         active.insert(key, name.clone());
@@ -348,6 +365,7 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                         KeyEvent {
                             name: name.clone(),
                             state: "DOWN",
+                            keyboard_layout,
                             raw_key: RawKey {
                                 name: Some(name.clone()),
                                 name_raw: Some(raw_name),
@@ -356,6 +374,11 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyRelease(key) => {
+                    let keyboard_layout = update_keyboard_layout(
+                        &detected_keyboard_layout_for_events,
+                        key,
+                        event.name.as_ref(),
+                    );
                     let (fallback_name, name_raw) = key_name_for_event(event.name.as_ref(), key);
                     let name = active_key_names_for_events
                         .lock()
@@ -372,6 +395,7 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                         KeyEvent {
                             name: name.clone(),
                             state: "UP",
+                            keyboard_layout,
                             raw_key: RawKey {
                                 name: Some(name.clone()),
                                 name_raw: Some(name_raw.unwrap_or(name.clone())),
@@ -409,6 +433,50 @@ fn emit_key_if_state_changed(
     };
 
     emit_global_key_event(app, event, &down);
+}
+
+#[cfg(target_os = "macos")]
+fn update_keyboard_layout(
+    detected_keyboard_layout: &Arc<Mutex<KeyboardLayout>>,
+    key: Key,
+    event_name: Option<&String>,
+) -> KeyboardLayout {
+    let inferred = infer_keyboard_layout(key, event_name);
+
+    let Ok(mut current) = detected_keyboard_layout.lock() else {
+        return inferred.unwrap_or(KeyboardLayout::Unknown);
+    };
+
+    match (*current, inferred) {
+        (KeyboardLayout::Jis, _) => KeyboardLayout::Jis,
+        (_, Some(KeyboardLayout::Jis)) => {
+            *current = KeyboardLayout::Jis;
+            KeyboardLayout::Jis
+        }
+        (KeyboardLayout::Unknown, Some(layout)) => {
+            *current = layout;
+            layout
+        }
+        _ => *current,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn infer_keyboard_layout(key: Key, event_name: Option<&String>) -> Option<KeyboardLayout> {
+    if matches!(key, Key::Unknown(93) | Key::Unknown(94) | Key::Unknown(102) | Key::Unknown(104)) {
+        return Some(KeyboardLayout::Jis);
+    }
+
+    if let Some(name) = event_name {
+        if name == "¥" || name == "￥" {
+            return Some(KeyboardLayout::Jis);
+        }
+        if matches!(key, Key::BackSlash) && name == "\\" {
+            return Some(KeyboardLayout::Us);
+        }
+    }
+
+    None
 }
 
 #[cfg(target_os = "macos")]
