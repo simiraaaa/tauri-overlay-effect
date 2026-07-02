@@ -144,37 +144,6 @@ fn emit_log(app: &tauri::AppHandle, message: &str) {
 }
 
 #[cfg(target_os = "macos")]
-fn current_cursor_position_for_event(
-    app: &tauri::AppHandle,
-    cursor_position_for_events: &Arc<Mutex<(i32, i32)>>,
-    normalized_position_for_events: &Arc<Mutex<(i32, i32)>>,
-) -> (i32, i32) {
-    let normalized = app.get_webview_window("main").and_then(|window| {
-        window
-            .cursor_position()
-            .ok()
-            .map(|position| {
-                let x = position.x.round() as i32;
-                let y = position.y.round() as i32;
-                normalize_global_mouse_position(app, x, y, normalized_position_for_events)
-            })
-    });
-
-    match normalized {
-        Some(position) => {
-            if let Ok(mut cursor_position) = cursor_position_for_events.lock() {
-                *cursor_position = position;
-            }
-            position
-        }
-        None => cursor_position_for_events
-            .lock()
-            .map(|position| *position)
-            .unwrap_or((0, 0)),
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn normalize_global_mouse_position(
     app: &tauri::AppHandle,
     raw_x: i32,
@@ -289,11 +258,7 @@ fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     }
                 }
                 EventType::ButtonPress(button) => {
-                    let (x, y) = current_cursor_position_for_event(
-                        &app_for_events,
-                        &cursor_position_for_events,
-                        &normalized_position_for_events,
-                    );
+                    let (x, y) = cursor_position_for_events.lock().map(|position| *position).unwrap_or((0, 0));
 
                     is_button_down.store(true, Ordering::Relaxed);
 
@@ -314,11 +279,7 @@ fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::ButtonRelease(button) => {
-                    let (x, y) = current_cursor_position_for_event(
-                        &app_for_events,
-                        &cursor_position_for_events,
-                        &normalized_position_for_events,
-                    );
+                    let (x, y) = cursor_position_for_events.lock().map(|position| *position).unwrap_or((0, 0));
                     is_button_down.store(false, Ordering::Relaxed);
 
                     let position = match button {
