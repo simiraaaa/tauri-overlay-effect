@@ -17,6 +17,9 @@
 	let pressedKeySet = $state(new Set<string>());
 	let unlisteners = $state<(() => void)[]>([]);
 	let keyboardLayout = $state<KeyboardLayout>('unknown');
+	let pressedKeyIdleTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const PRESSED_KEY_IDLE_RESET_MS = 2500;
 
 	const log = (...args: unknown[]) => {
 		logs.push(...args);
@@ -34,6 +37,7 @@
 	});
 
 	onDestroy(() => {
+		clearPressedKeyIdleTimer();
 		for (const unlisten of unlisteners) {
 			unlisten();
 		}
@@ -48,6 +52,7 @@
 		}
 
 		keyboardLayout = e.keyboardLayout || keyboardLayout;
+		schedulePressedKeyIdleReset();
 
 		const display_key = toDisplayKeyName(e.rawKey?.name, keyboardLayout);
 		if (e.state === 'DOWN') {
@@ -94,6 +99,21 @@
 				.map(([key]) => toDisplayKeyName(key, layout)),
 		);
 		return true;
+	};
+
+	const clearPressedKeyIdleTimer = () => {
+		if (pressedKeyIdleTimer) {
+			clearTimeout(pressedKeyIdleTimer);
+			pressedKeyIdleTimer = undefined;
+		}
+	};
+
+	const schedulePressedKeyIdleReset = () => {
+		clearPressedKeyIdleTimer();
+		pressedKeyIdleTimer = setTimeout(() => {
+			pressedKeySet = new Set();
+			pressedKeyIdleTimer = undefined;
+		}, PRESSED_KEY_IDLE_RESET_MS);
 	};
 
 	const pushKeys = (keys: string[] = []) => {
