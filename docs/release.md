@@ -111,7 +111,8 @@ Manual flow:
 3. Create a draft GitHub Release from the tag.
 4. Upload the `.dmg` asset.
 5. Paste the checksum into the release notes.
-6. Publish the release after local install verification is complete.
+6. Mark the release as a pre-release when publishing a beta or release candidate.
+7. Publish the release after local install verification is complete.
 
 GitHub CLI example:
 
@@ -122,6 +123,7 @@ git push origin v0.1.0-beta.1
 gh release create v0.1.0-beta.1 \
   src-tauri/target/release/bundle/dmg/*.dmg \
   --draft \
+  --prerelease \
   --title "Overlay Effect 0.1.0 beta 1" \
   --notes-file release-notes.md
 ```
