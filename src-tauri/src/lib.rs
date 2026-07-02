@@ -8,6 +8,10 @@ use std::panic::{self, AssertUnwindSafe};
 
 #[cfg(target_os = "macos")]
 use rdev::{listen, Button, Event, EventType};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{
+    NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
+};
 use tauri::{Emitter, Manager};
 use tauri::{PhysicalPosition, PhysicalSize};
 
@@ -338,7 +342,54 @@ fn apply_overlay_window_bounds(window: &tauri::WebviewWindow) {
 fn apply_macos_overlay_window_level(window: &tauri::WebviewWindow) {
     let _ = window.set_always_on_top(true);
     let _ = window.set_visible_on_all_workspaces(true);
+
+    let ns_window = match window.ns_window() {
+        Ok(handle) if !handle.is_null() => handle as *mut NSWindow,
+        _ => return,
+    };
+
+    let ns_window: &NSWindow = unsafe { &*ns_window };
+    set_overlay_ns_window_level(ns_window);
+
+    // メニューバー領域まで含めて画面全体を覆う。
+    // AppKit はメニューバーより低いレベルのウィンドウを constrainFrameRect で
+    // メニューバー高さ分だけ下へ押し下げる。レベルを上げた「後」に画面全体の
+    // フレームを再設定することで、この押し下げを回避しウィンドウ原点を画面最上部に揃える。
+    // NSScreen の frame はポイント単位なので Retina スケールにも追従する。
+    if let Some(screen) = ns_window.screen() {
+        ns_window.setFrame_display(screen.frame(), true);
+    }
 }
+
+// ウィンドウレベルとコレクションビヘイビアだけを適用する（フレームには触れない）。
+// メニューバー(24)より高い NSScreenSaverWindowLevel(1000) に置くことで前面へ出す。
+#[cfg(target_os = "macos")]
+fn set_overlay_ns_window_level(ns_window: &NSWindow) {
+    ns_window.setLevel(NSScreenSaverWindowLevel);
+    ns_window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::Stationary,
+    );
+}
+
+// Tauri は webview 初期化時に config の alwaysOnTop を再適用し、
+// ウィンドウレベルをメニューバーより低い値へ戻してしまう。
+// 表示後にレベルだけを再主張して、メニューバー前面を維持する。
+#[cfg(target_os = "macos")]
+fn reassert_overlay_window_level(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(handle) = window.ns_window() {
+            if !handle.is_null() {
+                let ns_window: &NSWindow = unsafe { &*(handle as *mut NSWindow) };
+                set_overlay_ns_window_level(ns_window);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reassert_overlay_window_level(_app: &tauri::AppHandle) {}
 
 #[cfg(not(target_os = "macos"))]
 fn apply_macos_overlay_window_level(_window: &tauri::WebviewWindow) {}
@@ -366,6 +417,35 @@ pub fn run() {
                     let _ = window.set_decorations(false);
                     apply_overlay_window_bounds(&window);
                     apply_macos_overlay_window_level(&window);
+
+                    // フォーカス/移動/リサイズ時に Tauri がレベルを戻すことがあるため、
+                    // それらのイベントごとにメニューバー前面レベルを再主張する。
+                    let level_guard_app = app.handle().clone();
+                    window.on_window_event(move |event| match event {
+                        tauri::WindowEvent::Focused(_)
+                        | tauri::WindowEvent::Moved(_)
+                        | tauri::WindowEvent::Resized(_) => {
+                            reassert_overlay_window_level(&level_guard_app);
+                        }
+                        _ => {}
+                    });
+                }
+
+                // 起動直後、Tauri が config の alwaysOnTop を webview 初期化時に
+                // 再適用してレベルをメニューバーより下へ戻す。そのタイミングを確実に
+                // 上書きするため、最初の数秒はレベルを複数回再主張する。
+                #[cfg(target_os = "macos")]
+                {
+                    let reassert_app = app.handle().clone();
+                    thread::spawn(move || {
+                        for delay_ms in [80u64, 150, 300, 500, 800, 1200, 2000] {
+                            thread::sleep(std::time::Duration::from_millis(delay_ms));
+                            let step_app = reassert_app.clone();
+                            let _ = reassert_app.run_on_main_thread(move || {
+                                reassert_overlay_window_level(&step_app);
+                            });
+                        }
+                    });
                 }
 
                 let listener_app = app.handle().clone();
