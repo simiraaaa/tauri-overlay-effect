@@ -44,7 +44,7 @@ Enable these permissions in System Settings when prompted:
 
 If the app stops receiving input after reinstalling or rebuilding, remove the old app entry from the permission list, launch the app again, and grant permission again.
 
-If input monitoring was granted while the app was already running, use the tray menu item `Retry Input Monitoring`.
+If input monitoring was granted while the app was already running, use the tray menu item `入力監視を再試行` (`Retry Input Monitoring`).
 
 ## Developer setup
 
