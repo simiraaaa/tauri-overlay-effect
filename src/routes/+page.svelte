@@ -18,6 +18,8 @@
 	let unlisteners = $state<(() => void)[]>([]);
 	let keyboardLayout = $state<KeyboardLayout>('unknown');
 	let pressedKeyIdleTimer: ReturnType<typeof setTimeout> | undefined;
+	let ignoredStaleDownKeys = new Set<string>();
+	let lastDownKeys = new Set<string>();
 
 	const PRESSED_KEY_IDLE_RESET_MS = 2500;
 
@@ -54,8 +56,10 @@
 		keyboardLayout = e.keyboardLayout || keyboardLayout;
 		schedulePressedKeyIdleReset();
 
-		const display_key = toDisplayKeyName(e.rawKey?.name, keyboardLayout);
+		const rawKeyName = e.rawKey?.name || '';
+		const display_key = toDisplayKeyName(rawKeyName, keyboardLayout);
 		if (e.state === 'DOWN') {
+			ignoredStaleDownKeys.delete(rawKeyName);
 			syncPressedKeys(down, keyboardLayout);
 			pressedKeySet.add(display_key);
 			let key_display_threshold = 2;
@@ -84,6 +88,7 @@
 				}
 			}
 		} else if (e.state === 'UP') {
+			ignoredStaleDownKeys.delete(rawKeyName);
 			if (!syncPressedKeys(down, keyboardLayout)) {
 				pressedKeySet.delete(display_key);
 			}
@@ -93,10 +98,16 @@
 	const syncPressedKeys = (down: GlobalKeyDownMap, layout: KeyboardLayout) => {
 		if (!down || typeof down !== 'object') return false;
 
-		pressedKeySet = new Set(
+		lastDownKeys = new Set(
 			Object.entries(down)
 				.filter(([, pressed]) => pressed)
-				.map(([key]) => toDisplayKeyName(key, layout)),
+				.map(([key]) => key),
+		);
+
+		pressedKeySet = new Set(
+			[...lastDownKeys]
+				.filter((key) => !ignoredStaleDownKeys.has(key))
+				.map((key) => toDisplayKeyName(key, layout)),
 		);
 		return true;
 	};
@@ -111,6 +122,7 @@
 	const schedulePressedKeyIdleReset = () => {
 		clearPressedKeyIdleTimer();
 		pressedKeyIdleTimer = setTimeout(() => {
+			ignoredStaleDownKeys = new Set(lastDownKeys);
 			pressedKeySet = new Set();
 			pressedKeyIdleTimer = undefined;
 		}, PRESSED_KEY_IDLE_RESET_MS);
