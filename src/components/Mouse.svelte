@@ -74,6 +74,13 @@
 		if (typeof unlisten === 'function') {
 			unlisten();
 		}
+		if (_timeout_id) {
+			clearTimeout(_timeout_id);
+			_timeout_id = null;
+		}
+		_visible = false;
+		_time = 0;
+		visible.set(false);
 	});
 </script>
 

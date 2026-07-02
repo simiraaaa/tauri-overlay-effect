@@ -17,12 +17,14 @@ declare global {
 		onGlobalKeyboard: (callback: (event: unknown, keyEvent: GlobalKeyEvent, down: GlobalKeyDownMap) => void) => Unlisten | Promise<Unlisten>;
 		onLog: (callback: (...args: unknown[]) => void) => Unlisten | Promise<Unlisten>;
 		onGlobalMouse: (callback: (event: unknown, mouseEvent: GlobalMouseEvent) => void) => Unlisten | Promise<Unlisten>;
+		onChangeOverlayVisible: (callback: (visible: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeMouseEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeKeyboardEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeTimerPaused: (callback: (paused: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterText: (callback: (text: string) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterIndex: (callback: (index: number) => void) => Unlisten | Promise<Unlisten>;
+		getOverlayVisible: () => Promise<boolean>;
 		getSettings: () => Promise<AppData.Settings>;
 		setSettings: (settings: AppData.Settings) => Promise<void>;
 		getChapterText: () => Promise<string>;

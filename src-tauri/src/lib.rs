@@ -6,8 +6,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::thread;
 use std::panic::{self, AssertUnwindSafe};
+use std::thread;
 
 #[cfg(target_os = "macos")]
 use rdev::{listen, Button, Event, EventType, Key};
@@ -15,13 +15,37 @@ use rdev::{listen, Button, Event, EventType, Key};
 use objc2_app_kit::{
     NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
 };
-use tauri::{Emitter, Manager};
-use tauri::{PhysicalPosition, PhysicalSize};
+use tauri::{
+    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
+    tray::TrayIconBuilder,
+    Emitter, Manager, PhysicalPosition, PhysicalSize,
+};
 
-#[derive(Default)]
+const MENU_TOGGLE_OVERLAY: &str = "toggle-overlay";
+const MENU_TOGGLE_MOUSE: &str = "toggle-mouse";
+const MENU_TOGGLE_KEYBOARD: &str = "toggle-keyboard";
+const MENU_OPEN_CHAPTER_SETTINGS: &str = "open-chapter-settings";
+const MENU_TOGGLE_CHAPTER: &str = "toggle-chapter";
+const MENU_PREVIOUS_CHAPTER: &str = "previous-chapter";
+const MENU_NEXT_CHAPTER: &str = "next-chapter";
+const MENU_RESTART_CHAPTER: &str = "restart-chapter";
+const MENU_TOGGLE_TIMER_PAUSE: &str = "toggle-timer-pause";
+const MENU_QUIT: &str = "quit";
+
 struct AppState {
     storage_path: Option<PathBuf>,
     data: PersistedState,
+    overlay_visible: bool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            storage_path: None,
+            data: PersistedState::default(),
+            overlay_visible: true,
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -108,6 +132,14 @@ fn get_settings(state: tauri::State<'_, Mutex<AppState>>) -> Settings {
         .lock()
         .map(|state| state.data.settings.clone())
         .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_overlay_visible(state: tauri::State<'_, Mutex<AppState>>) -> bool {
+    state
+        .lock()
+        .map(|state| state.overlay_visible)
+        .unwrap_or(true)
 }
 
 #[tauri::command]
@@ -288,6 +320,288 @@ fn save_persisted_state(path: &Option<PathBuf>, data: &PersistedState) -> Result
     fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
     fs::rename(&temporary_path, path).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn update_persisted_settings(
+    app: &tauri::AppHandle,
+    update: impl FnOnce(&mut Settings),
+) -> Result<Settings, String> {
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().map_err(|error| error.to_string())?;
+    let mut next = state.data.clone();
+    update(&mut next.settings);
+    let settings = next.settings.clone();
+    save_persisted_state(&state.storage_path, &next)?;
+    state.data = next;
+    Ok(settings)
+}
+
+fn set_chapter_index_from_menu(
+    app: &tauri::AppHandle,
+    update: impl FnOnce(usize) -> usize,
+) -> Result<ChapterIndexResult, String> {
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().map_err(|error| error.to_string())?;
+    let mut next = state.data.clone();
+    let index = update(next.chapter_index);
+    let result = set_chapter_index_inner(&mut next, index);
+    save_persisted_state(&state.storage_path, &next)?;
+    state.data = next;
+    Ok(result)
+}
+
+fn emit_menu_error(app: &tauri::AppHandle, message: &str) {
+    eprintln!("{message}");
+    emit_log(app, message);
+}
+
+fn toggle_mouse_enabled(app: &tauri::AppHandle) {
+    match update_persisted_settings(app, |settings| {
+        settings.enable_mouse = !settings.enable_mouse;
+    }) {
+        Ok(settings) => {
+            let _ = app.emit("change-mouse-enable", settings.enable_mouse);
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to toggle mouse effects: {error}")),
+    }
+}
+
+fn toggle_keyboard_enabled(app: &tauri::AppHandle) {
+    match update_persisted_settings(app, |settings| {
+        settings.enable_keyboard = !settings.enable_keyboard;
+    }) {
+        Ok(settings) => {
+            let _ = app.emit("change-keyboard-enable", settings.enable_keyboard);
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to toggle keyboard effects: {error}")),
+    }
+}
+
+fn toggle_chapter_enabled(app: &tauri::AppHandle) {
+    match update_persisted_settings(app, |settings| {
+        settings.enable_chapter = !settings.enable_chapter;
+    }) {
+        Ok(settings) => {
+            let _ = app.emit("change-chapter-enable", settings.enable_chapter);
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to toggle chapter display: {error}")),
+    }
+}
+
+fn toggle_timer_paused(app: &tauri::AppHandle) {
+    match update_persisted_settings(app, |settings| {
+        settings.timer_paused = !settings.timer_paused;
+    }) {
+        Ok(settings) => {
+            let _ = app.emit("change-timer-paused", settings.timer_paused);
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to toggle chapter timer pause: {error}")),
+    }
+}
+
+fn move_chapter_index(app: &tauri::AppHandle, amount: isize) {
+    let result = set_chapter_index_from_menu(app, |current| {
+        if amount.is_negative() {
+            current.saturating_sub(amount.unsigned_abs())
+        } else {
+            current.saturating_add(amount as usize)
+        }
+    });
+
+    match result {
+        Ok(result) => {
+            let _ = app.emit("change-chapter-index", result.index);
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to move chapter index: {error}")),
+    }
+}
+
+fn restart_chapter(app: &tauri::AppHandle) {
+    match set_chapter_index_from_menu(app, |_| 0) {
+        Ok(result) => {
+            let _ = app.emit("change-chapter-index", result.index);
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to restart chapter: {error}")),
+    }
+}
+
+fn configure_overlay_window(window: &tauri::WebviewWindow) {
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_ignore_cursor_events(true);
+    let _ = window.set_shadow(false);
+    let _ = window.set_decorations(false);
+    apply_overlay_window_bounds(window);
+    apply_macos_overlay_window_level(window);
+}
+
+fn toggle_overlay_visibility(app: &tauri::AppHandle) -> Option<bool> {
+    let state = app.state::<Mutex<AppState>>();
+    let visible = match state.lock() {
+        Ok(mut state) => {
+            state.overlay_visible = !state.overlay_visible;
+            state.overlay_visible
+        }
+        Err(error) => {
+            emit_menu_error(app, &format!("Failed to toggle overlay visibility: {error}"));
+            return None;
+        }
+    };
+
+    if visible {
+        reassert_overlay_window_level(app);
+    }
+
+    if let Err(error) = app.emit("change-overlay-visible", visible) {
+        emit_menu_error(app, &format!("Failed to emit overlay visibility: {error}"));
+        return None;
+    }
+
+    Some(visible)
+}
+
+fn open_chapter_settings_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("chapter-setting") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        app,
+        "chapter-setting",
+        tauri::WebviewUrl::App("/chapter-setting".into()),
+    )
+    .title("Chapter Settings")
+    .inner_size(460.0, 520.0)
+    .resizable(true)
+    .decorations(true)
+    .transparent(false)
+    .always_on_top(false)
+    .build()
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
+    match id {
+        MENU_TOGGLE_OVERLAY => {
+            let _ = toggle_overlay_visibility(app);
+        }
+        MENU_TOGGLE_MOUSE => toggle_mouse_enabled(app),
+        MENU_TOGGLE_KEYBOARD => toggle_keyboard_enabled(app),
+        MENU_OPEN_CHAPTER_SETTINGS => {
+            if let Err(error) = open_chapter_settings_window(app) {
+                emit_menu_error(app, &format!("Failed to open chapter settings window: {error}"));
+            }
+        }
+        MENU_TOGGLE_CHAPTER => toggle_chapter_enabled(app),
+        MENU_PREVIOUS_CHAPTER => move_chapter_index(app, -1),
+        MENU_NEXT_CHAPTER => move_chapter_index(app, 1),
+        MENU_RESTART_CHAPTER => restart_chapter(app),
+        MENU_TOGGLE_TIMER_PAUSE => toggle_timer_paused(app),
+        MENU_QUIT => app.exit(0),
+        _ => {}
+    }
+}
+
+fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
+    let (initial_settings, overlay_visible) = {
+        let app_state = app.state::<Mutex<AppState>>();
+        let state = app_state.lock().map_err(|error| error.to_string())?;
+
+        (state.data.settings.clone(), state.overlay_visible)
+    };
+
+    let toggle_overlay = CheckMenuItemBuilder::with_id(MENU_TOGGLE_OVERLAY, "オーバーレイを表示/非表示")
+        .checked(overlay_visible)
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let mouse_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_MOUSE, "マウスクリックを表示")
+        .checked(initial_settings.enable_mouse)
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let keyboard_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_KEYBOARD, "キー入力を表示")
+        .checked(initial_settings.enable_keyboard)
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let open_chapter_settings =
+        MenuItemBuilder::with_id(MENU_OPEN_CHAPTER_SETTINGS, "チャプター設定画面を開く")
+            .build(app)
+            .map_err(|error| error.to_string())?;
+    let chapter_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_CHAPTER, "チャプターを表示")
+        .checked(initial_settings.enable_chapter)
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let previous_chapter = MenuItemBuilder::with_id(MENU_PREVIOUS_CHAPTER, "前のチャプター")
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let next_chapter = MenuItemBuilder::with_id(MENU_NEXT_CHAPTER, "次のチャプター")
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let restart_chapter =
+        MenuItemBuilder::with_id(MENU_RESTART_CHAPTER, "チャプターを最初から開始する")
+            .build(app)
+            .map_err(|error| error.to_string())?;
+    let toggle_timer_pause =
+        MenuItemBuilder::with_id(MENU_TOGGLE_TIMER_PAUSE, "タイマー一時停止/再開")
+            .build(app)
+            .map_err(|error| error.to_string())?;
+    let quit = MenuItemBuilder::with_id(MENU_QUIT, "終了する")
+        .build(app)
+        .map_err(|error| error.to_string())?;
+
+    let menu = MenuBuilder::new(app)
+        .items(&[
+            &toggle_overlay,
+            &mouse_enabled,
+            &keyboard_enabled,
+            &open_chapter_settings,
+            &chapter_enabled,
+            &previous_chapter,
+            &next_chapter,
+            &restart_chapter,
+            &toggle_timer_pause,
+            &quit,
+        ])
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let toggle_overlay_for_menu = toggle_overlay.clone();
+    let mut tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .on_menu_event(move |app, event| {
+            if event.id().as_ref() == MENU_TOGGLE_OVERLAY {
+                if let Some(visible) = toggle_overlay_visibility(app) {
+                    let _ = toggle_overlay_for_menu.set_checked(visible);
+                }
+                return;
+            }
+
+            handle_tray_menu_event(app, event.id().as_ref());
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+
+    tray.build(app).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn chapter_pause_shortcut() -> tauri_plugin_global_shortcut::Shortcut {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyP)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn register_global_shortcuts(app: &tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    app.global_shortcut()
+        .register(chapter_pause_shortcut())
+        .map_err(|error| error.to_string())
 }
 
 fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
@@ -789,6 +1103,8 @@ fn apply_macos_overlay_window_level(window: &tauri::WebviewWindow) {
     if let Some(screen) = ns_window.screen() {
         ns_window.setFrame_display(screen.frame(), true);
     }
+    ns_window.orderFrontRegardless();
+    set_overlay_ns_window_level(ns_window);
 }
 
 // ウィンドウレベルとコレクションビヘイビアだけを適用する（フレームには触れない）。
@@ -805,7 +1121,7 @@ fn set_overlay_ns_window_level(ns_window: &NSWindow) {
 
 // Tauri は webview 初期化時に config の alwaysOnTop を再適用し、
 // ウィンドウレベルをメニューバーより低い値へ戻してしまう。
-// 表示後にレベルだけを再主張して、メニューバー前面を維持する。
+// 起動後の通常イベントではフレームに触らず、レベルだけを再主張する。
 #[cfg(target_os = "macos")]
 fn reassert_overlay_window_level(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -825,9 +1141,25 @@ fn reassert_overlay_window_level(_app: &tauri::AppHandle) {}
 fn apply_macos_overlay_window_level(_window: &tauri::WebviewWindow) {}
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, shortcut, event| {
+                if shortcut == &chapter_pause_shortcut()
+                    && event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed
+                {
+                    toggle_timer_paused(app);
+                }
+            })
+            .build(),
+    );
+
+    builder
         .manage(Mutex::new(AppState::default()))
         .invoke_handler(tauri::generate_handler![
+            get_overlay_visible,
             get_settings,
             set_settings,
             get_chapter_text,
@@ -848,13 +1180,21 @@ pub fn run() {
                     emit_log(&setup_app, &message);
                 }
 
+                if let Err(error) = setup_tray(app) {
+                    let message = format!("Failed to setup tray menu: {error}");
+                    eprintln!("{message}");
+                    emit_log(&setup_app, &message);
+                }
+
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                if let Err(error) = register_global_shortcuts(&setup_app) {
+                    let message = format!("Failed to register global shortcut: {error}");
+                    eprintln!("{message}");
+                    emit_log(&setup_app, &message);
+                }
+
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_always_on_top(true);
-                    let _ = window.set_ignore_cursor_events(true);
-                    let _ = window.set_shadow(false);
-                    let _ = window.set_decorations(false);
-                    apply_overlay_window_bounds(&window);
-                    apply_macos_overlay_window_level(&window);
+                    configure_overlay_window(&window);
 
                     // フォーカス/移動/リサイズ時に Tauri がレベルを戻すことがあるため、
                     // それらのイベントごとにメニューバー前面レベルを再主張する。

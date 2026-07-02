@@ -10,6 +10,7 @@ export const settings = writable<AppData.Settings>({
 
 export const chapterText = writable("");
 export const chapterIndex = writable(0);
+export const overlayVisible = writable(true);
 
 export const init = async () => {
   const appBridge = await getAppBridge();
@@ -26,7 +27,12 @@ export const init = async () => {
     });
   };
 
+  await appBridge.onChangeOverlayVisible((visible: boolean) => {
+    overlayVisible.set(visible);
+  });
+
   try {
+    overlayVisible.set(await appBridge.getOverlayVisible());
     const s = await appBridge.getSettings();
     if (s) {
       settings.set(s);
