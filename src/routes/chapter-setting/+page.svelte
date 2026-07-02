@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { chapterIndex, chapterText } from "$lib/scripts/app";
+  import { chapterIndex } from "$lib/scripts/app";
   import { getAppBridge } from "$lib/scripts/app-bridge";
-  import { debounce } from "$lib/scripts/util";
   import { onMount } from "svelte";
 
-	let textareaElement = $state<HTMLTextAreaElement | undefined>(undefined);
 	let appBridge: AppBridge | undefined;
+  let chapterDraft = $state("");
   let lineNumber = $state($chapterIndex + 1);
   $effect(() => {
     lineNumber = $chapterIndex + 1;
@@ -15,23 +14,20 @@
 
   onMount(async () => {
     appBridge = await getAppBridge();
-    if (!textareaElement || !appBridge) return;
-    textareaElement.value = await appBridge.getChapterText();
+    if (!appBridge) return;
+    chapterDraft = await appBridge.getChapterText();
   });
 
   const onInput = () => {
     saved = false;
-    debouncedSave();
   };
 
   const onInputIndex = () => {
     saved = false;
-    debouncedSaveIndex();
   };
 
   const getFormattedText = (): string => {
-    if (!textareaElement) return '';
-    return textareaElement.value
+    return chapterDraft
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
@@ -44,18 +40,8 @@
       const bridge = appBridge || (await getAppBridge());
       if (!bridge) return;
       await bridge.setChapterText(text);
-      saved = true;
-    } catch (error) {
-      console.error(error);
-      saved = false;
-    }
-  };
-
-  const saveIndex = async () => {
-    try {
-      const bridge = appBridge || (await getAppBridge());
-      if (!bridge) return;
       await bridge.setChapterIndex(lineNumber - 1);
+      chapterDraft = text;
       saved = true;
     } catch (error) {
       console.error(error);
@@ -63,10 +49,7 @@
     }
   };
 
-	const debouncedSave = debounce(save, 250);
-	const debouncedSaveIndex = debounce(saveIndex, 250);
-
-	let chapterLines = $derived($chapterText.split('\n').filter(Boolean));
+	let chapterLines = $derived(chapterDraft.split('\n').map((line) => line.trim()).filter(Boolean));
 	let maxLineNumber = $derived(Math.max(chapterLines.length, 1));
 	let chapterLine = $derived(chapterLines[lineNumber - 1] || '');
 </script>
@@ -76,7 +59,10 @@
 </svelte:head>
 
 <section>
-  <form action="/" method="post" onsubmit={(event) => event.preventDefault()}>
+  <form action="/" method="post" onsubmit={(event) => {
+    event.preventDefault();
+    save();
+  }}>
     <div class={saved ? "saved" : "not-saved"} aria-live="polite">{saved ? "保存済み" : "未保存"}</div>
 
     <fieldset class="index-setting">
@@ -102,10 +88,12 @@
     <textarea
       id="chapter-text"
       name="chapter-text"
-      bind:this={textareaElement}
+      bind:value={chapterDraft}
       oninput={onInput}
       spellcheck="false"
     ></textarea>
+
+    <button type="submit">保存する</button>
   </form>
 </section>
 
@@ -176,6 +164,17 @@
     flex-grow: 1;
     box-sizing: border-box;
     resize: vertical;
+  }
+
+  button {
+    flex-shrink: 0;
+    margin-top: 8px;
+    min-height: 36px;
+    border: 1px solid #999;
+    border-radius: 6px;
+    background: #fff;
+    font-weight: bold;
+    cursor: pointer;
   }
 
   .saved {
