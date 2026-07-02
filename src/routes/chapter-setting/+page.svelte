@@ -23,7 +23,6 @@
 
       closeUnlisten = await currentWindow.onCloseRequested(async (event) => {
         event.preventDefault();
-        await appBridge?.setChapterInputPaused(false);
         await currentWindow.hide();
       });
 
@@ -33,7 +32,6 @@
   });
 
   onDestroy(() => {
-    void appBridge?.setChapterInputPaused(false);
     closeUnlisten?.();
   });
 

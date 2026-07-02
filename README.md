@@ -66,7 +66,7 @@ Run the Tauri app in development mode:
 npm run tauri:dev
 ```
 
-Known development note: macOS native input monitoring can interact poorly with WebView text input in terminal-launched dev builds and may crash while editing the experimental chapter settings window. A packaged app build is more representative for testing that experimental UI.
+Known development note: macOS native input monitoring can interact poorly with WebView text input in terminal-launched dev builds and may crash while editing the experimental chapter settings window. The app pauses input monitoring while that window is open. After closing it, use the tray menu to retry input monitoring when input effects should resume.
 
 Run the Svelte frontend only:
 

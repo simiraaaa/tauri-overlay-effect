@@ -224,15 +224,39 @@ fn get_input_monitoring_status(state: tauri::State<'_, Mutex<AppState>>) -> Inpu
 
 #[tauri::command]
 fn retry_input_monitoring(app: tauri::AppHandle) -> Result<(), String> {
+    set_chapter_input_paused_inner(&app, false);
     start_global_input_monitoring(app);
     Ok(())
 }
 
 #[tauri::command]
-fn set_chapter_input_paused(paused: bool) {
+fn set_chapter_input_paused(app: tauri::AppHandle, paused: bool) {
+    set_chapter_input_paused_inner(&app, paused);
+}
+
+fn set_chapter_input_paused_inner(app: &tauri::AppHandle, paused: bool) {
     CHAPTER_SETTING_OPENED.store(paused, Ordering::SeqCst);
     #[cfg(target_os = "macos")]
     set_listen_paused(paused);
+
+    let status = if paused {
+        InputMonitoringStatus {
+            state: "disabled",
+            message: "Global input monitoring is paused while editing chapter settings.".to_string(),
+            guidance: Some(
+                "Close the chapter settings window, then use the tray menu to retry input monitoring when you want to resume input effects.".to_string(),
+            ),
+            can_retry: true,
+        }
+    } else {
+        InputMonitoringStatus {
+            state: "active",
+            message: "Global input monitoring is active.".to_string(),
+            guidance: None,
+            can_retry: false,
+        }
+    };
+    emit_input_monitoring_status(app, status);
 }
 
 #[tauri::command]
@@ -776,7 +800,7 @@ fn copy_chapter_lap_text(app: &tauri::AppHandle) {
 fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL) {
         let _ = window.show();
-        set_chapter_input_paused(true);
+        set_chapter_input_paused_inner(app, true);
         let _ = window.set_focus();
         return Ok(());
     }
@@ -797,7 +821,7 @@ fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
 
     let _ = window.center();
-    set_chapter_input_paused(true);
+    set_chapter_input_paused_inner(app, true);
     let _ = window.set_focus();
     Ok(())
 }
