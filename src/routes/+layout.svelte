@@ -23,7 +23,7 @@
 
 <style>
 	.app {
-		padding: 8px;
+		padding: 0;
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
