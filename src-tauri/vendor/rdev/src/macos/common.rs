@@ -1,10 +1,12 @@
 #![allow(clippy::upper_case_acronyms)]
 use crate::macos::keyboard::Keyboard;
 use crate::rdev::{Button, Event, EventType};
-use cocoa::base::id;
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, EventField};
+pub use core_graphics::sys::CGEventRef;
+use foreign_types::ForeignType;
 use lazy_static::lazy_static;
 use std::convert::TryInto;
+use std::mem::ManuallyDrop;
 use std::os::raw::c_void;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -13,12 +15,11 @@ use crate::macos::keycodes::key_from_code;
 
 pub type CFMachPortRef = *const c_void;
 pub type CFIndex = u64;
-pub type CFAllocatorRef = id;
-pub type CFRunLoopSourceRef = id;
-pub type CFRunLoopRef = id;
-pub type CFRunLoopMode = id;
-pub type CGEventTapProxy = id;
-pub type CGEventRef = CGEvent;
+pub type CFAllocatorRef = *const c_void;
+pub type CFRunLoopSourceRef = *const c_void;
+pub type CFRunLoopRef = *const c_void;
+pub type CFRunLoopMode = *const c_void;
+pub type CGEventTapProxy = *const c_void;
 
 // https://developer.apple.com/documentation/coregraphics/cgeventtapplacement?language=objc
 pub type CGEventTapPlacement = u32;
@@ -64,7 +65,7 @@ extern "C" {
         options: CGEventTapOption,
         eventsOfInterest: CGEventMask,
         callback: QCallback,
-        user_info: id,
+        user_info: *mut c_void,
     ) -> CFMachPortRef;
     pub fn CFMachPortCreateRunLoopSource(
         allocator: CFAllocatorRef,
@@ -79,13 +80,21 @@ extern "C" {
     pub static kCFRunLoopCommonModes: CFRunLoopMode;
 
 }
-#[allow(improper_ctypes_definitions)]
 pub type QCallback = unsafe extern "C" fn(
     proxy: CGEventTapProxy,
     _type: CGEventType,
     cg_event: CGEventRef,
     user_info: *mut c_void,
 ) -> CGEventRef;
+
+pub unsafe fn with_cg_event<T>(cg_event: CGEventRef, f: impl FnOnce(&CGEvent) -> T) -> Option<T> {
+    if cg_event.is_null() {
+        return None;
+    }
+
+    let event = ManuallyDrop::new(CGEvent::from_ptr(cg_event));
+    Some(f(&event))
+}
 
 pub unsafe fn convert(
     _type: CGEventType,
