@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
 };
 use tauri::{
-    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
+    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
     Emitter, Manager, PhysicalPosition, PhysicalSize,
 };
@@ -35,6 +35,14 @@ struct AppState {
     overlay_visible: bool,
     input_monitoring_status: InputMonitoringStatus,
     input_monitoring_attempt: u64,
+    tray_menu_items: Option<TrayMenuItems>,
+}
+
+#[derive(Clone)]
+struct TrayMenuItems {
+    overlay: CheckMenuItem<tauri::Wry>,
+    mouse: CheckMenuItem<tauri::Wry>,
+    keyboard: CheckMenuItem<tauri::Wry>,
 }
 
 struct TrayCheckState {
@@ -56,6 +64,7 @@ impl Default for AppState {
                 can_retry: false,
             },
             input_monitoring_attempt: 0,
+            tray_menu_items: None,
         }
     }
 }
@@ -200,15 +209,20 @@ fn retry_input_monitoring(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn set_settings(
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     settings: Settings,
 ) -> Result<(), String> {
     let mut state = state.lock().map_err(|error| error.to_string())?;
+    let previous_settings = state.data.settings.clone();
     let mut next = state.data.clone();
     next.settings = settings.clone();
     save_persisted_state(&state.storage_path, &next)?;
     state.data = next;
+    drop(state);
+
+    emit_settings_change_events(&app, &previous_settings, &settings);
+    sync_tray_check_items(&app);
     Ok(())
 }
 
@@ -397,13 +411,36 @@ fn emit_menu_error(app: &tauri::AppHandle, message: &str) {
     emit_log(app, message);
 }
 
-fn current_tray_check_state(app: &tauri::AppHandle) -> Option<TrayCheckState> {
+fn emit_settings_change_events(app: &tauri::AppHandle, previous: &Settings, next: &Settings) {
+    if previous.enable_mouse != next.enable_mouse {
+        let _ = app.emit("change-mouse-enable", next.enable_mouse);
+    }
+    if previous.enable_keyboard != next.enable_keyboard {
+        let _ = app.emit("change-keyboard-enable", next.enable_keyboard);
+    }
+    if previous.enable_chapter != next.enable_chapter {
+        let _ = app.emit("change-chapter-enable", next.enable_chapter);
+    }
+    if previous.timer_paused != next.timer_paused {
+        let _ = app.emit("change-timer-paused", next.timer_paused);
+    }
+}
+
+struct TraySyncSnapshot {
+    items: Option<TrayMenuItems>,
+    state: TrayCheckState,
+}
+
+fn current_tray_sync_snapshot(app: &tauri::AppHandle) -> Option<TraySyncSnapshot> {
     let state = app.state::<Mutex<AppState>>();
     let result = match state.lock() {
-        Ok(state) => Some(TrayCheckState {
-            overlay_visible: state.overlay_visible,
-            mouse_enabled: state.data.settings.enable_mouse,
-            keyboard_enabled: state.data.settings.enable_keyboard,
+        Ok(state) => Some(TraySyncSnapshot {
+            items: state.tray_menu_items.clone(),
+            state: TrayCheckState {
+                overlay_visible: state.overlay_visible,
+                mouse_enabled: state.data.settings.enable_mouse,
+                keyboard_enabled: state.data.settings.enable_keyboard,
+            },
         }),
         Err(error) => {
             emit_menu_error(app, &format!("Failed to read tray check state: {error}"));
@@ -411,6 +448,25 @@ fn current_tray_check_state(app: &tauri::AppHandle) -> Option<TrayCheckState> {
         }
     };
     result
+}
+
+fn sync_tray_check_items(app: &tauri::AppHandle) {
+    let Some(snapshot) = current_tray_sync_snapshot(app) else {
+        return;
+    };
+    let Some(items) = snapshot.items else {
+        return;
+    };
+
+    if let Err(error) = items.overlay.set_checked(snapshot.state.overlay_visible) {
+        emit_menu_error(app, &format!("Failed to sync overlay tray check state: {error}"));
+    }
+    if let Err(error) = items.mouse.set_checked(snapshot.state.mouse_enabled) {
+        emit_menu_error(app, &format!("Failed to sync mouse tray check state: {error}"));
+    }
+    if let Err(error) = items.keyboard.set_checked(snapshot.state.keyboard_enabled) {
+        emit_menu_error(app, &format!("Failed to sync keyboard tray check state: {error}"));
+    }
 }
 
 fn toggle_mouse_enabled(app: &tauri::AppHandle) -> Option<bool> {
@@ -544,36 +600,34 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .build()
         .map_err(|error| error.to_string())?;
 
-    let toggle_overlay_for_menu = toggle_overlay.clone();
-    let mouse_enabled_for_menu = mouse_enabled.clone();
-    let keyboard_enabled_for_menu = keyboard_enabled.clone();
+    {
+        let app_state = app.state::<Mutex<AppState>>();
+        let mut state = app_state.lock().map_err(|error| error.to_string())?;
+        state.tray_menu_items = Some(TrayMenuItems {
+            overlay: toggle_overlay.clone(),
+            mouse: mouse_enabled.clone(),
+            keyboard: keyboard_enabled.clone(),
+        });
+    }
+
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
         .on_menu_event(move |app, event| {
             if event.id().as_ref() == MENU_TOGGLE_OVERLAY {
-                let visible = toggle_overlay_visibility(app)
-                    .or_else(|| current_tray_check_state(app).map(|state| state.overlay_visible));
-                if let Some(visible) = visible {
-                    let _ = toggle_overlay_for_menu.set_checked(visible);
-                }
+                let _ = toggle_overlay_visibility(app);
+                sync_tray_check_items(app);
                 return;
             }
 
             if event.id().as_ref() == MENU_TOGGLE_MOUSE {
-                let enabled = toggle_mouse_enabled(app)
-                    .or_else(|| current_tray_check_state(app).map(|state| state.mouse_enabled));
-                if let Some(enabled) = enabled {
-                    let _ = mouse_enabled_for_menu.set_checked(enabled);
-                }
+                let _ = toggle_mouse_enabled(app);
+                sync_tray_check_items(app);
                 return;
             }
 
             if event.id().as_ref() == MENU_TOGGLE_KEYBOARD {
-                let enabled = toggle_keyboard_enabled(app)
-                    .or_else(|| current_tray_check_state(app).map(|state| state.keyboard_enabled));
-                if let Some(enabled) = enabled {
-                    let _ = keyboard_enabled_for_menu.set_checked(enabled);
-                }
+                let _ = toggle_keyboard_enabled(app);
+                sync_tray_check_items(app);
                 return;
             }
 
