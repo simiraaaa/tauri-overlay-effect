@@ -417,18 +417,65 @@ fn show_overlay_window(window: &tauri::WebviewWindow) {
     apply_macos_overlay_window_level(window);
 }
 
-fn toggle_overlay_visibility(app: &tauri::AppHandle) {
+fn reapply_visible_overlay_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    if window.is_visible().ok() != Some(true) {
+        return;
+    }
+
+    let _ = window.set_ignore_cursor_events(true);
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_shadow(false);
+    let _ = window.set_decorations(false);
+    apply_overlay_window_bounds(&window);
+    apply_macos_overlay_window_level(&window);
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_overlay_window_reapply(app: &tauri::AppHandle) {
+    let app = app.clone();
+    thread::spawn(move || {
+        for delay_ms in [50u64, 120, 250, 500, 900, 1500] {
+            thread::sleep(std::time::Duration::from_millis(delay_ms));
+            let step_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                reapply_visible_overlay_window(&step_app);
+            });
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn schedule_overlay_window_reapply(_app: &tauri::AppHandle) {}
+
+fn toggle_overlay_visibility(app: &tauri::AppHandle) -> Option<bool> {
     let Some(window) = app.get_webview_window("main") else {
         emit_menu_error(app, "Failed to toggle overlay window: main window was not found");
-        return;
+        return None;
     };
 
     match window.is_visible() {
         Ok(true) => {
-            let _ = window.hide();
+            match window.hide() {
+                Ok(()) => Some(false),
+                Err(error) => {
+                    emit_menu_error(app, &format!("Failed to hide overlay window: {error}"));
+                    None
+                }
+            }
         }
-        Ok(false) => show_overlay_window(&window),
-        Err(error) => emit_menu_error(app, &format!("Failed to read overlay window visibility: {error}")),
+        Ok(false) => {
+            show_overlay_window(&window);
+            schedule_overlay_window_reapply(app);
+            Some(true)
+        }
+        Err(error) => {
+            emit_menu_error(app, &format!("Failed to read overlay window visibility: {error}"));
+            None
+        }
     }
 }
 
@@ -457,7 +504,9 @@ fn open_chapter_settings_window(app: &tauri::AppHandle) -> Result<(), String> {
 
 fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
     match id {
-        MENU_TOGGLE_OVERLAY => toggle_overlay_visibility(app),
+        MENU_TOGGLE_OVERLAY => {
+            let _ = toggle_overlay_visibility(app);
+        }
         MENU_TOGGLE_MOUSE => toggle_mouse_enabled(app),
         MENU_TOGGLE_KEYBOARD => toggle_keyboard_enabled(app),
         MENU_OPEN_CHAPTER_SETTINGS => {
@@ -484,7 +533,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .settings
         .clone();
 
-    let toggle_overlay = MenuItemBuilder::with_id(MENU_TOGGLE_OVERLAY, "オーバーレイを表示/非表示")
+    let toggle_overlay = CheckMenuItemBuilder::with_id(MENU_TOGGLE_OVERLAY, "オーバーレイを表示/非表示")
+        .checked(true)
         .build(app)
         .map_err(|error| error.to_string())?;
     let mouse_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_MOUSE, "マウスクリックを表示")
@@ -537,12 +587,22 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .build()
         .map_err(|error| error.to_string())?;
 
+    let toggle_overlay_for_menu = toggle_overlay.clone();
+    let toggle_overlay_for_tray = toggle_overlay.clone();
+
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
-        .on_menu_event(|app, event| {
+        .on_menu_event(move |app, event| {
+            if event.id().as_ref() == MENU_TOGGLE_OVERLAY {
+                if let Some(visible) = toggle_overlay_visibility(app) {
+                    let _ = toggle_overlay_for_menu.set_checked(visible);
+                }
+                return;
+            }
+
             handle_tray_menu_event(app, event.id().as_ref());
         })
-        .on_tray_icon_event(|tray, event| {
+        .on_tray_icon_event(move |tray, event| {
             if matches!(
                 event,
                 TrayIconEvent::Click {
@@ -551,7 +611,9 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
                     ..
                 }
             ) {
-                toggle_overlay_visibility(tray.app_handle());
+                if let Some(visible) = toggle_overlay_visibility(tray.app_handle()) {
+                    let _ = toggle_overlay_for_tray.set_checked(visible);
+                }
             }
         });
 
