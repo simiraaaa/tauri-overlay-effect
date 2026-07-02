@@ -112,7 +112,7 @@ fn get_settings(state: tauri::State<'_, Mutex<AppState>>) -> Settings {
 
 #[tauri::command]
 fn set_settings(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     settings: Settings,
 ) -> Result<(), String> {
@@ -121,7 +121,6 @@ fn set_settings(
     next.settings = settings.clone();
     save_persisted_state(&state.storage_path, &next)?;
     state.data = next;
-    emit_settings_changed(&app, &settings);
     Ok(())
 }
 
@@ -213,13 +212,16 @@ fn initialize_persisted_state(app: &tauri::AppHandle) -> Result<(), String> {
     let storage_path = persisted_state_path(app)?;
     let data = match load_persisted_state(&storage_path) {
         Ok(data) => data,
-        Err(error) => {
+        Err(PersistedStateLoadError::Parse(error)) => {
             let quarantined_path = quarantine_persisted_state(&storage_path)?;
             eprintln!(
                 "Failed to read persisted app state: {error}. Moved the broken file to {}",
                 quarantined_path.display()
             );
             PersistedState::default()
+        }
+        Err(PersistedStateLoadError::Read(error)) => {
+            return Err(format!("Failed to read persisted app state: {error}"));
         }
     };
     let state = app.state::<Mutex<AppState>>();
@@ -235,13 +237,19 @@ fn persisted_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(directory.join("state.json"))
 }
 
-fn load_persisted_state(path: &PathBuf) -> Result<PersistedState, String> {
+enum PersistedStateLoadError {
+    Read(String),
+    Parse(String),
+}
+
+fn load_persisted_state(path: &PathBuf) -> Result<PersistedState, PersistedStateLoadError> {
     if !path.exists() {
         return Ok(PersistedState::default());
     }
 
-    let contents = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    serde_json::from_str::<PersistedState>(&contents).map_err(|error| error.to_string())
+    let contents = fs::read_to_string(path).map_err(|error| PersistedStateLoadError::Read(error.to_string()))?;
+    serde_json::from_str::<PersistedState>(&contents)
+        .map_err(|error| PersistedStateLoadError::Parse(error.to_string()))
 }
 
 fn quarantine_persisted_state(path: &PathBuf) -> Result<PathBuf, String> {
@@ -268,7 +276,7 @@ fn normalize_persisted_state(mut state: PersistedState) -> PersistedState {
 
 fn save_persisted_state(path: &Option<PathBuf>, data: &PersistedState) -> Result<(), String> {
     let Some(path) = path else {
-        return Ok(());
+        return Err("Persistent storage is not initialized".to_string());
     };
 
     if let Some(directory) = path.parent() {
@@ -280,13 +288,6 @@ fn save_persisted_state(path: &Option<PathBuf>, data: &PersistedState) -> Result
     fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
     fs::rename(&temporary_path, path).map_err(|error| error.to_string())?;
     Ok(())
-}
-
-fn emit_settings_changed(app: &tauri::AppHandle, settings: &Settings) {
-    let _ = app.emit("change-mouse-enable", settings.enable_mouse);
-    let _ = app.emit("change-keyboard-enable", settings.enable_keyboard);
-    let _ = app.emit("change-chapter-enable", settings.enable_chapter);
-    let _ = app.emit("change-timer-paused", settings.timer_paused);
 }
 
 fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
