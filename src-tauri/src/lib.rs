@@ -140,6 +140,22 @@ fn emit_log(app: &tauri::AppHandle, message: &str) {
 }
 
 #[cfg(target_os = "macos")]
+fn read_current_cursor_position(
+    app: &tauri::AppHandle,
+    normalized_position: &Arc<Mutex<(i32, i32)>>,
+) -> Option<(i32, i32)> {
+    let window = app.get_webview_window("main")?;
+    let position = window.cursor_position().ok()?;
+
+    Some(normalize_global_mouse_position(
+        app,
+        position.x as i32,
+        position.y as i32,
+        normalized_position,
+    ))
+}
+
+#[cfg(target_os = "macos")]
 fn normalize_global_mouse_position(
     app: &tauri::AppHandle,
     raw_x: i32,
@@ -254,7 +270,13 @@ fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     }
                 }
                 EventType::ButtonPress(button) => {
-                    let (x, y) = cursor_position_for_events.lock().map(|position| *position).unwrap_or((0, 0));
+                    let (x, y) = read_current_cursor_position(&app_for_normalize_events, &normalized_position_for_events)
+                        .or_else(|| cursor_position_for_events.lock().ok().map(|position| *position))
+                        .unwrap_or((0, 0));
+                    if let Ok(mut position) = cursor_position_for_events.lock() {
+                        *position = (x, y);
+                    }
+
                     is_button_down.store(true, Ordering::Relaxed);
 
                     let position = match button {
@@ -273,14 +295,25 @@ fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                         },
                     );
                 }
-                EventType::ButtonRelease(_) => {
+                EventType::ButtonRelease(button) => {
+                    let (x, y) = read_current_cursor_position(&app_for_normalize_events, &normalized_position_for_events)
+                        .or_else(|| cursor_position_for_events.lock().ok().map(|position| *position))
+                        .unwrap_or((0, 0));
+                    if let Ok(mut position) = cursor_position_for_events.lock() {
+                        *position = (x, y);
+                    }
                     is_button_down.store(false, Ordering::Relaxed);
-                    let (x, y) = cursor_position_for_events.lock().map(|position| *position).unwrap_or((0, 0));
+
+                    let position = match button {
+                        Button::Left => "left",
+                        Button::Right => "right",
+                        _ => "other",
+                    };
 
                     emit_global_mouse_event(
                         &app_for_events,
                         MouseEvent {
-                            position: "left",
+                            position,
                             event_type: "up",
                             x,
                             y,
@@ -330,6 +363,7 @@ fn apply_overlay_window_bounds(window: &tauri::WebviewWindow) {
 #[cfg(target_os = "macos")]
 fn apply_macos_overlay_window_level(window: &tauri::WebviewWindow) {
     let _ = window.set_always_on_top(true);
+    let _ = window.set_visible_on_all_workspaces(true);
 }
 
 #[cfg(not(target_os = "macos"))]
