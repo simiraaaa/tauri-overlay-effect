@@ -27,7 +27,7 @@ export const init = async () => {
     });
   };
 
-  appBridge.onChangeOverlayVisible((visible: boolean) => {
+  await appBridge.onChangeOverlayVisible((visible: boolean) => {
     overlayVisible.set(visible);
   });
 
