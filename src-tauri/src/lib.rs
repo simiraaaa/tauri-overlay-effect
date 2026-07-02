@@ -264,14 +264,17 @@ fn set_chapter_text(
     let mut next = state.data.clone();
     next.chapter_text = text.clone();
 
-    let current_index = next.chapter_index;
-    let result = set_chapter_index_inner(&mut next, current_index);
+    let last = last_chapter_index(&next.chapter_text);
+    if next.chapter_index > last {
+        next.chapter_index = last;
+    }
+    let next_index = next.chapter_index;
     save_persisted_state(&state.storage_path, &next)?;
     state.data = next;
     drop(state);
 
     let _ = app.emit("change-chapter-text", text);
-    let _ = app.emit("change-chapter-index", result.index);
+    let _ = app.emit("change-chapter-index", next_index);
     Ok(())
 }
 

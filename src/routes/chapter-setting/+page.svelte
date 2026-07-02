@@ -39,10 +39,10 @@
   };
 
   const save = async () => {
-    const text = getFormattedText();
-    const bridge = appBridge || (await getAppBridge());
-    if (!bridge) return;
     try {
+      const text = getFormattedText();
+      const bridge = appBridge || (await getAppBridge());
+      if (!bridge) return;
       await bridge.setChapterText(text);
       saved = true;
     } catch (error) {
@@ -52,9 +52,9 @@
   };
 
   const saveIndex = async () => {
-    const bridge = appBridge || (await getAppBridge());
-    if (!bridge) return;
     try {
+      const bridge = appBridge || (await getAppBridge());
+      if (!bridge) return;
       await bridge.setChapterIndex(lineNumber - 1);
       saved = true;
     } catch (error) {
