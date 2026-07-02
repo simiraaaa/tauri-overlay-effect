@@ -1,83 +1,129 @@
-# Tauri Overlay Effect (Migration Prototype)
+# Tauri Overlay Effect
 
-This repository is a Tauri v2 + Svelte migration prototype of the overlay effect app.
-This document is the public-facing setup and verification guide.
+Tauri Overlay Effect is a macOS overlay app that visualizes mouse clicks and keyboard input on top of the screen.
 
-## Requirements
+It is useful for screen sharing, demos, tutorials, recordings, and live coding sessions where viewers need to see what you clicked or typed.
+
+This repository is a Tauri v2 + Svelte migration of the original Electron overlay app.
+
+## Features
+
+- Shows mouse click effects over the desktop.
+- Shows keyboard input as an overlay.
+- Uses a transparent, frameless, click-through overlay window.
+- Keeps the overlay above normal windows and macOS Spaces where possible.
+- Provides a tray menu to show/hide the overlay, toggle mouse effects, toggle keyboard effects, retry input monitoring, and quit the app.
+- Supports multi-display overlay bounds on macOS.
+- Provides macOS permission guidance when global input monitoring is not active.
+
+## Platform support
+
+macOS is the primary supported platform.
+
+Windows and Linux are not currently supported or verified. Cross-platform support is intentionally low priority until the macOS version is stable.
+
+## Basic usage on macOS
+
+1. Download or build the macOS `.dmg`.
+2. Open the `.dmg`.
+3. Drag `Overlay Effect.app` into the Applications folder.
+4. Launch the app.
+5. Grant macOS permissions when needed.
+6. Use the tray icon in the menu bar to toggle overlay, mouse, and keyboard display.
+
+Unsigned local builds may show a macOS Gatekeeper warning. Public distribution should use signing and notarization.
+
+## macOS permissions
+
+The app needs macOS permissions to observe global mouse and keyboard input.
+
+Enable these permissions in System Settings when prompted:
+
+- Accessibility
+- Input Monitoring
+
+If the app stops receiving input after reinstalling or rebuilding, remove the old app entry from the permission list, launch the app again, and grant permission again.
+
+If input monitoring was granted while the app was already running, use the tray menu item `Retry Input Monitoring`.
+
+## Developer setup
+
+Requirements:
+
 - Node.js 20.19+
-- Rust (for Tauri)
-- macOS (minimum first-tier support)
+- Rust
+- macOS for the currently supported native runtime
 
-## Setup
+Install dependencies:
+
 ```bash
-# clone repository
-# git clone <repo-url>
-cd <repo-root>
-
 npm install
 ```
 
-## Development check
-### Start (recommended)
+Run the Tauri app in development mode:
+
 ```bash
 npm run tauri:dev
 ```
-- Vite and Tauri launcher starts together.
-- Confirm overlay window appears.
-- Confirm transparent / frameless / no shadow / always-on-top behavior.
-- Confirm mouse events pass through the underlying app when click-through is expected.
 
-### Frontend only
+Run the Svelte frontend only:
+
 ```bash
 npm run dev
 ```
-- Quick check for Svelte UI rendering and CSS updates.
 
-### Type / static checks
+Run type and Svelte checks:
+
 ```bash
 npm run check
 ```
-- Runs TypeScript/kit checks.
 
-### Production build (web bundle)
+Build the web bundle:
+
 ```bash
 npm run build
 ```
 
-### Tauri build
-```bash
-npm run tauri:build
-```
-- Build artifacts are created under `src-tauri/target/release` and packaged output.
+## macOS builds
 
-### macOS distribution build
+Build the configured macOS `.app` and `.dmg` bundles:
+
 ```bash
 npm run tauri:build:macos
 ```
-- Builds the configured macOS `.app` and `.dmg` bundles.
-- The `.app` bundle is created under `src-tauri/target/release/bundle/macos`.
-- The `.dmg` bundle is created under `src-tauri/target/release/bundle/dmg`.
 
-To build only one macOS bundle type:
+Build only one bundle type:
+
 ```bash
 npm run tauri:build:macos:app
 npm run tauri:build:macos:dmg
 ```
 
-### macOS signing and notarization
-The repository does not store signing certificates, API keys, app-specific passwords, or provisioning profiles.
+Build outputs are created under:
+
+- `src-tauri/target/release/bundle/macos`
+- `src-tauri/target/release/bundle/dmg`
+
+DMG creation uses macOS `hdiutil`. It may fail inside restricted sandbox environments even when it succeeds in a normal local terminal.
+
+## Signing and notarization
+
+The repository does not store signing certificates, API keys, app-specific passwords, keychains, or provisioning profiles.
 
 For local signing, install the certificate into your macOS keychain and check the signing identity:
+
 ```bash
 security find-identity -v -p codesigning
 ```
 
-Then build with the signing identity supplied through the environment:
+Then pass the identity through the environment:
+
 ```bash
 APPLE_SIGNING_IDENTITY="Developer ID Application: Example Team (TEAMID)" npm run tauri:build:macos
 ```
 
-For notarization with an Apple ID app-specific password, set these environment variables before running the build:
+For notarization with an Apple ID app-specific password:
+
 ```bash
 export APPLE_ID="apple-id@example.com"
 export APPLE_PASSWORD="app-specific-password"
@@ -87,14 +133,12 @@ export APPLE_SIGNING_IDENTITY="Developer ID Application: Example Team (TEAMID)"
 npm run tauri:build:macos
 ```
 
-`src-tauri/Entitlements.plist` is intentionally minimal. Do not enable App Sandbox without rechecking global mouse/keyboard monitoring, click-through overlay behavior, and macOS permission prompts.
+`src-tauri/Entitlements.plist` is intentionally minimal. Do not enable App Sandbox without rechecking global mouse monitoring, global keyboard monitoring, click-through overlay behavior, and macOS permission prompts.
 
-## Troubleshooting
-- Port conflict: Vite uses `5173` in this repo.
-- Permission prompts (macOS): check Accessibility settings if input permissions are required for full native features.
-- Dirty state or unexpected generated files: confirm `.gitignore` is respected (`node_modules`, `.svelte-kit`, `build`, `src-tauri/target`, `src-tauri/gen`).
-- macOS Gatekeeper warning: unsigned local builds may require manual approval. Use signing and notarization for public distribution.
+## Current limitations
 
-## Notes
-- The repository keeps generated build artifacts untracked.
-- This document should be used for local reproducible checks before feature work.
+- Windows and Linux support is not implemented or verified.
+- The app is still a migration prototype, not a final replacement release.
+- Some lower-level warnings from vendored native input dependencies remain during Rust builds.
+- Global input monitoring depends on macOS permission state and may require manual permission reset after reinstalling or rebuilding.
+- Chapter-related UI from the original app is experimental and not part of the current public feature set.
