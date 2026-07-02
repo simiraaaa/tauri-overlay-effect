@@ -1,4 +1,3 @@
-#![allow(improper_ctypes_definitions)]
 use crate::macos::common::*;
 use crate::rdev::{Event, ListenError};
 use cocoa::base::nil;
@@ -44,6 +43,7 @@ where
 {
     unsafe {
         GLOBAL_CALLBACK = Some(Box::new(callback));
+
         let _pool = NSAutoreleasePool::new(nil);
         let tap = CGEventTapCreate(
             CGEventTapLocation::HID, // HID, Session, AnnotatedSession,

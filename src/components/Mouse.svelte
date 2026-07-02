@@ -4,7 +4,8 @@
 	import { writable } from "svelte/store";
 
 	type GlobalMouseEvent = {
-		type: 'down' | 'drag' | 'up' | string;
+		type?: 'down' | 'drag' | 'up' | string;
+		event_type?: 'down' | 'drag' | 'up' | string;
 		x: number;
 		y: number;
 	};
@@ -19,7 +20,10 @@
 	const MIN_VISIBLE_TIME = 1000 / 60 * 3;
 
 	const onGlobalMouse = (_e: unknown, mouse: GlobalMouseEvent): void => {
-		if (mouse.type === 'down' || mouse.type === 'drag') {
+		const eventType = mouse.type ?? mouse.event_type;
+		if (!eventType) return;
+
+		if (eventType === 'down' || eventType === 'drag') {
 			x.set(Math.floor(mouse.x));
 			y.set(Math.floor(mouse.y));
 			if (!_visible) {
@@ -90,17 +94,18 @@
 <style>
 	.overlay {
 		pointer-events: none;
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 100vw;
-		height: 100vh;
+		position: fixed;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		z-index: 2147483647;
 
 		/* background: rgba(0, 0, 0, 0.1); */
 	}
 
 	.mouse {
 		position: absolute;
+		z-index: 1;
 		left: var(--x);
 		top: var(--y);
 		width: var(--size-wrap);
@@ -115,6 +120,7 @@
 	.mouse-inner {
 		position: absolute;
 		display: block;
+		z-index: 1;
 		left: var(--x);
 		top: var(--y);
 		width: var(--size);

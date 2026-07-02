@@ -4,7 +4,6 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
-use std::time::Duration;
 use std::panic::{self, AssertUnwindSafe};
 
 #[cfg(target_os = "macos")]
@@ -125,7 +124,15 @@ fn last_chapter_index(text: &str) -> usize {
 }
 
 fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
-    let _ = app.emit("global-mouse", event);
+    if let Some(window) = app.get_webview_window("main") {
+        if window.emit("global-mouse", &event).is_ok() {
+            return;
+        }
+    }
+
+    if let Err(error) = app.emit("global-mouse", event) {
+        eprintln!("Failed to emit global mouse event: {error:?}");
+    }
 }
 
 fn emit_log(app: &tauri::AppHandle, message: &str) {
@@ -247,8 +254,9 @@ fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     }
                 }
                 EventType::ButtonPress(button) => {
-                    is_button_down.store(true, Ordering::Relaxed);
                     let (x, y) = cursor_position_for_events.lock().map(|position| *position).unwrap_or((0, 0));
+                    is_button_down.store(true, Ordering::Relaxed);
+
                     let position = match button {
                         Button::Left => "left",
                         Button::Right => "right",
@@ -353,32 +361,23 @@ pub fn run() {
                 }
 
                 let listener_app = app.handle().clone();
-                let watcher_app = app.handle().clone();
                 let event_seen = Arc::new(AtomicBool::new(false));
                 let event_seen_for_listener = Arc::clone(&event_seen);
-                let event_seen_for_watchdog = Arc::clone(&event_seen);
 
                 if std::env::var("OVERLAY_DISABLE_MOUSE_LISTENER").ok().as_deref() != Some("1") {
+                    let _watchdog_app = app.handle().clone();
                     thread::spawn(move || {
-                        if let Err(error) =
-                            spawn_global_mouse_events(listener_app, event_seen_for_listener)
-                        {
-                            eprintln!("Failed to start global mouse monitoring: {error}");
+                        if let Err(error) = spawn_global_mouse_events(listener_app, event_seen_for_listener) {
+                            let message = format!(
+                                "Failed to start global mouse monitoring: {error}. Please allow Accessibility for this app in System Settings > Privacy & Security > Accessibility."
+                            );
+                            eprintln!("{message}");
+                            emit_log(&_watchdog_app, &message);
                         }
                     });
                 } else {
                     eprintln!("Global mouse listener disabled by OVERLAY_DISABLE_MOUSE_LISTENER=1");
                 }
-
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(1000));
-                    if !event_seen_for_watchdog.load(Ordering::SeqCst) {
-                        emit_log(
-                            &watcher_app,
-                            "Global mouse monitoring may not be active. Please allow Accessibility for this app in System Settings > Privacy & Security > Accessibility.",
-                        );
-                    }
-                });
             })) {
                 eprintln!("Panic in app setup: {:?}", error);
             }
