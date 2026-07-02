@@ -419,25 +419,43 @@ fn normalize_key_raw_name(name: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn key_name_for_event(event_name: Option<&String>, key: Key) -> (String, Option<String>) {
-    let raw = event_name.filter(|name| !name.is_empty()).cloned();
+    if let Some(name) = key_name_from_physical_key(key) {
+        return (name.clone(), Some(format!("{key:?}")));
+    }
+
+    let raw = event_name
+        .filter(|name| is_printable_key_name(name))
+        .cloned();
     if let Some(name) = &raw {
         let normalized = normalize_key_raw_name(name);
         return (normalized, Some(name.clone()));
     }
 
-    let fallback = match key {
+    let fallback = format!("{key:?}");
+    (fallback, raw)
+}
+
+#[cfg(target_os = "macos")]
+fn key_name_from_physical_key(key: Key) -> Option<String> {
+    let name = match key {
         Key::ShiftLeft => "Shift".to_string(),
         Key::ShiftRight => "RightShift".to_string(),
         Key::ControlLeft => "Control".to_string(),
         Key::ControlRight => "RightControl".to_string(),
         Key::Alt => "Option".to_string(),
+        Key::AltGr => "RightOption".to_string(),
         Key::MetaLeft => "Command".to_string(),
         Key::MetaRight => "RightCommand".to_string(),
+        Key::Backspace => "Delete".to_string(),
         Key::Return => "Return".to_string(),
         Key::CapsLock => "CapsLock".to_string(),
         Key::Delete => "Delete".to_string(),
         Key::Tab => "Tab".to_string(),
         Key::Escape => "Escape".to_string(),
+        Key::Home => "Home".to_string(),
+        Key::End => "End".to_string(),
+        Key::PageUp => "PageUp".to_string(),
+        Key::PageDown => "PageDown".to_string(),
         Key::UpArrow => "UpArrow".to_string(),
         Key::DownArrow => "DownArrow".to_string(),
         Key::LeftArrow => "LeftArrow".to_string(),
@@ -458,6 +476,7 @@ fn key_name_for_event(event_name: Option<&String>, key: Key) -> (String, Option<
         Key::Space => "Space".to_string(),
         Key::Slash => "Slash".to_string(),
         Key::BackSlash => "Backslash".to_string(),
+        Key::IntlBackslash => "Backslash".to_string(),
         Key::SemiColon => "Semicolon".to_string(),
         Key::Quote => "Quote".to_string(),
         Key::KpReturn => "Return".to_string(),
@@ -472,33 +491,51 @@ fn key_name_for_event(event_name: Option<&String>, key: Key) -> (String, Option<
         Key::Num9 => "9".to_string(),
         Key::Num0 => "0".to_string(),
         Key::NumLock => "NumLock".to_string(),
-        Key::Minus => "-".to_string(),
-        Key::Equal => "=".to_string(),
-        Key::Dot => ".".to_string(),
-        Key::Comma => ",".to_string(),
-        Key::BackQuote => "`".to_string(),
-        Key::Unknown(code) => format!("Unknown({code})"),
+        Key::Minus => "Minus".to_string(),
+        Key::Equal => "Equal".to_string(),
+        Key::Dot => "Period".to_string(),
+        Key::Comma => "Comma".to_string(),
+        Key::BackQuote => "BackQuote".to_string(),
+        Key::KpMinus => "Minus".to_string(),
+        Key::KpPlus => "Plus".to_string(),
+        Key::KpMultiply => "Multiply".to_string(),
+        Key::KpDivide => "Slash".to_string(),
+        Key::Kp0 => "0".to_string(),
+        Key::Kp1 => "1".to_string(),
+        Key::Kp2 => "2".to_string(),
+        Key::Kp3 => "3".to_string(),
+        Key::Kp4 => "4".to_string(),
+        Key::Kp5 => "5".to_string(),
+        Key::Kp6 => "6".to_string(),
+        Key::Kp7 => "7".to_string(),
+        Key::Kp8 => "8".to_string(),
+        Key::Kp9 => "9".to_string(),
+        Key::KpDelete => "Delete".to_string(),
+        Key::PrintScreen => "PrintScreen".to_string(),
+        Key::ScrollLock => "ScrollLock".to_string(),
+        Key::Pause => "Pause".to_string(),
+        Key::Insert => "Insert".to_string(),
+        Key::Unknown(_) => return None,
         _ => {
             let raw = format!("{key:?}");
             if let Some(rest) = raw.strip_prefix("Key") {
-                if rest.chars().count() == 1 {
-                    rest.to_string()
-                } else {
-                    rest.to_string()
-                }
-            } else if let Some(rest) = raw.strip_prefix("Kp") {
-                if rest.chars().count() == 1 {
-                    rest.to_string()
-                } else {
-                    rest.to_string()
-                }
+                rest.to_string()
             } else {
-                raw
+                return None;
             }
         }
     };
 
-    (fallback, raw)
+    Some(name)
+}
+
+#[cfg(target_os = "macos")]
+fn is_printable_key_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|character| {
+            !character.is_control()
+                && !matches!(character as u32, 0xE000..=0xF8FF)
+        })
 }
 
 #[cfg(not(target_os = "macos"))]

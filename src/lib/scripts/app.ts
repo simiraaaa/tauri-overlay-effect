@@ -76,9 +76,13 @@ export const KEY_CONSTANTS: Record<string, string> = {
   slash: "/",
   backslash: "\\",
   minus: "-",
+  equal: "=",
   comma: ",",
   period: ".",
   semicolon: ";",
+  quote: "'",
+  backQuote: "`",
+  space: "space",
   function: "fn",
 };
 
@@ -100,10 +104,15 @@ export const KEY_NAME_TO_DISPLAY_TEXT_MAP: Record<string, string> = {
   UpArrow: KEY_CONSTANTS.arrowUp,
   DownArrow: KEY_CONSTANTS.arrowDown,
   Slash: KEY_CONSTANTS.slash,
+  Backslash: KEY_CONSTANTS.backslash,
   Minus: KEY_CONSTANTS.minus,
+  Equal: KEY_CONSTANTS.equal,
   Comma: KEY_CONSTANTS.comma,
   Period: KEY_CONSTANTS.period,
   Semicolon: KEY_CONSTANTS.semicolon,
+  Quote: KEY_CONSTANTS.quote,
+  BackQuote: KEY_CONSTANTS.backQuote,
+  Space: KEY_CONSTANTS.space,
   Function: KEY_CONSTANTS.function,
 };
 
