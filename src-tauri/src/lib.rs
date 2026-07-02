@@ -251,12 +251,14 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
     let cursor_position = Arc::new(Mutex::new((0i32, 0i32)));
     let normalized_position = Arc::new(Mutex::new((0i32, 0i32)));
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
+    let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
     let app_for_events = app.clone();
 
     let is_button_down_for_events = Arc::clone(&is_button_down);
     let cursor_position_for_events = Arc::clone(&cursor_position);
     let normalized_position_for_events = Arc::clone(&normalized_position);
     let pressed_keys_for_events = Arc::clone(&pressed_keys);
+    let active_key_names_for_events = Arc::clone(&active_key_names);
     let app_for_normalize_events = app_for_events.clone();
 
     let listener = move |event: Event| {
@@ -332,6 +334,9 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                 }
                 EventType::KeyPress(key) => {
                     let (name, name_raw) = key_name_for_event(event.name.as_ref(), key);
+                    let _ = active_key_names_for_events.lock().map(|mut active| {
+                        active.insert(key, name.clone());
+                    });
                     let _ = pressed_keys_for_events.lock().map(|mut down| {
                         down.insert(name.clone(), true);
                     });
@@ -351,7 +356,12 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyRelease(key) => {
-                    let (name, name_raw) = key_name_for_event(event.name.as_ref(), key);
+                    let (fallback_name, name_raw) = key_name_for_event(event.name.as_ref(), key);
+                    let name = active_key_names_for_events
+                        .lock()
+                        .ok()
+                        .and_then(|mut active| active.remove(&key))
+                        .unwrap_or(fallback_name);
                     let _ = pressed_keys_for_events.lock().map(|mut down| {
                         down.remove(&name);
                     });
@@ -419,7 +429,7 @@ fn normalize_key_raw_name(name: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn key_name_for_event(event_name: Option<&String>, key: Key) -> (String, Option<String>) {
-    if let Some(name) = key_name_from_physical_key(key) {
+    if let Some(name) = stable_key_name_from_physical_key(key) {
         return (name.clone(), Some(format!("{key:?}")));
     }
 
@@ -436,7 +446,7 @@ fn key_name_for_event(event_name: Option<&String>, key: Key) -> (String, Option<
 }
 
 #[cfg(target_os = "macos")]
-fn key_name_from_physical_key(key: Key) -> Option<String> {
+fn stable_key_name_from_physical_key(key: Key) -> Option<String> {
     let name = match key {
         Key::ShiftLeft => "Shift".to_string(),
         Key::ShiftRight => "RightShift".to_string(),
@@ -474,11 +484,6 @@ fn key_name_from_physical_key(key: Key) -> Option<String> {
         Key::F11 => "F11".to_string(),
         Key::F12 => "F12".to_string(),
         Key::Space => "Space".to_string(),
-        Key::Slash => "Slash".to_string(),
-        Key::BackSlash => "Backslash".to_string(),
-        Key::IntlBackslash => "Backslash".to_string(),
-        Key::SemiColon => "Semicolon".to_string(),
-        Key::Quote => "Quote".to_string(),
         Key::KpReturn => "Return".to_string(),
         Key::Num1 => "1".to_string(),
         Key::Num2 => "2".to_string(),
@@ -491,11 +496,6 @@ fn key_name_from_physical_key(key: Key) -> Option<String> {
         Key::Num9 => "9".to_string(),
         Key::Num0 => "0".to_string(),
         Key::NumLock => "NumLock".to_string(),
-        Key::Minus => "Minus".to_string(),
-        Key::Equal => "Equal".to_string(),
-        Key::Dot => "Period".to_string(),
-        Key::Comma => "Comma".to_string(),
-        Key::BackQuote => "BackQuote".to_string(),
         Key::KpMinus => "Minus".to_string(),
         Key::KpPlus => "Plus".to_string(),
         Key::KpMultiply => "Multiply".to_string(),
@@ -515,6 +515,10 @@ fn key_name_from_physical_key(key: Key) -> Option<String> {
         Key::ScrollLock => "ScrollLock".to_string(),
         Key::Pause => "Pause".to_string(),
         Key::Insert => "Insert".to_string(),
+        Key::Unknown(93) => "JisYen".to_string(),
+        Key::Unknown(94) => "JisUnderscore".to_string(),
+        Key::Unknown(102) => "Eisu".to_string(),
+        Key::Unknown(104) => "Kana".to_string(),
         Key::Unknown(_) => return None,
         _ => {
             let raw = format!("{key:?}");
