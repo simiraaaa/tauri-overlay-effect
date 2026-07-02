@@ -18,18 +18,22 @@
   onMount(() => {
     const currentWindow = getCurrentWindow();
     void (async () => {
+      appBridge = await getAppBridge();
+      await appBridge?.setChapterInputPaused(true);
+
       closeUnlisten = await currentWindow.onCloseRequested(async (event) => {
         event.preventDefault();
+        await appBridge?.setChapterInputPaused(false);
         await currentWindow.hide();
       });
 
-      appBridge = await getAppBridge();
       if (!appBridge) return;
       chapterDraft = await appBridge.getChapterText();
     })();
   });
 
   onDestroy(() => {
+    void appBridge?.setChapterInputPaused(false);
     closeUnlisten?.();
   });
 

@@ -13,7 +13,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
-use rdev::{listen, Button, Event, EventType, Key};
+use rdev::{listen, set_listen_paused, Button, Event, EventType, Key};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
     NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
@@ -226,6 +226,13 @@ fn get_input_monitoring_status(state: tauri::State<'_, Mutex<AppState>>) -> Inpu
 fn retry_input_monitoring(app: tauri::AppHandle) -> Result<(), String> {
     start_global_input_monitoring(app);
     Ok(())
+}
+
+#[tauri::command]
+fn set_chapter_input_paused(paused: bool) {
+    CHAPTER_SETTING_OPENED.store(paused, Ordering::SeqCst);
+    #[cfg(target_os = "macos")]
+    set_listen_paused(paused);
 }
 
 #[tauri::command]
@@ -767,10 +774,9 @@ fn copy_chapter_lap_text(app: &tauri::AppHandle) {
 }
 
 fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
-    CHAPTER_SETTING_OPENED.store(true, Ordering::SeqCst);
-
     if let Some(window) = app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL) {
         let _ = window.show();
+        set_chapter_input_paused(true);
         let _ = window.set_focus();
         return Ok(());
     }
@@ -791,6 +797,7 @@ fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
 
     let _ = window.center();
+    set_chapter_input_paused(true);
     let _ = window.set_focus();
     Ok(())
 }
@@ -1792,6 +1799,7 @@ pub fn run() {
             get_overlay_visible,
             get_input_monitoring_status,
             retry_input_monitoring,
+            set_chapter_input_paused,
             get_settings,
             set_settings,
             get_chapter_text,
