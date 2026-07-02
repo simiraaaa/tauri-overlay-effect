@@ -4,7 +4,7 @@
 	import Mouse from "$components/Mouse.svelte";
 	import { dev } from '$app/environment';
 	import { getAppBridge } from "$lib/scripts/app-bridge";
-	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings, toDisplayKeyName } from "$lib/scripts/app";
+	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, overlayVisible, settings, toDisplayKeyName } from "$lib/scripts/app";
 	import { onDestroy, onMount } from "svelte";
 
 	type KeyParam = {
@@ -47,6 +47,7 @@
 	});
 
 	const keydownHandler = (_e: unknown, e: GlobalKeyEvent, down: GlobalKeyDownMap) => {
+		if (!$overlayVisible) return;
 		if (!$settings.enableKeyboard) return;
 
 		if (e.name?.startsWith('MOUSE')) {
@@ -162,6 +163,15 @@
 		keyParams = keyParams.filter((p) => p.id !== param.id);
 	};
 
+	$effect(() => {
+		if ($overlayVisible) return;
+		clearPressedKeyIdleTimer();
+		keyParams = [];
+		pressedKeySet = new Set();
+		ignoredStaleDownKeys = new Set();
+		lastDownKeys = new Set();
+	});
+
 	let chapterLine = $derived(`${$chapterIndex + 1}. ` + $chapterText.split('\n')[$chapterIndex]);
 </script>
 
@@ -173,7 +183,7 @@
 </svelte:head>
 
 <section>
-	{#if $settings.enableChapter}
+	{#if $overlayVisible && $settings.enableChapter}
 		<div class="chapter-container">
 			<Chapter text={chapterLine}></Chapter>
 			{#if $settings.timerPaused}
@@ -190,7 +200,7 @@
 		</div>
 	{/if}
 	<div>
-		{#if $settings.enableKeyboard}
+		{#if $overlayVisible && $settings.enableKeyboard}
 			<div class="key-view-container">
 				{#each keyParams as param, i (param.id)}
 					<div class="key-item">
@@ -207,7 +217,7 @@
 
 	</div>
 </section>
-	{#if $settings.enableMouse}
+	{#if $overlayVisible && $settings.enableMouse}
 		<Mouse log={log}></Mouse>
 	{/if}
 

@@ -10,6 +10,7 @@ export const settings = writable<AppData.Settings>({
 
 export const chapterText = writable("");
 export const chapterIndex = writable(0);
+export const overlayVisible = writable(true);
 
 export const init = async () => {
   const appBridge = await getAppBridge();
@@ -41,6 +42,9 @@ export const init = async () => {
     updateSettings((s) => {
       s.enableMouse = checked;
     });
+  });
+  appBridge.onChangeOverlayVisible((visible: boolean) => {
+    overlayVisible.set(visible);
   });
   appBridge.onChangeKeyboardEnable((checked: boolean) => {
     updateSettings((s) => {

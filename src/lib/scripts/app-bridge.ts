@@ -15,6 +15,7 @@ const noopBridge: AppBridge = {
   onGlobalKeyboard: () => noopUnlisten,
   onLog: () => noopUnlisten,
   onGlobalMouse: () => noopUnlisten,
+  onChangeOverlayVisible: () => noopUnlisten,
   onChangeMouseEnable: () => noopUnlisten,
   onChangeKeyboardEnable: () => noopUnlisten,
   onChangeChapterEnable: () => noopUnlisten,
@@ -83,6 +84,7 @@ const createTauriBridge = async (): Promise<AppBridge> => {
     onGlobalMouse: (callback) => listenPayload('global-mouse', (payload) => {
       callback({}, payload as GlobalMouseEvent);
     }),
+    onChangeOverlayVisible: (callback) => listenPayload<boolean>('change-overlay-visible', callback),
     onChangeMouseEnable: (callback) => listenPayload<boolean>('change-mouse-enable', callback),
     onChangeKeyboardEnable: (callback) => listenPayload<boolean>('change-keyboard-enable', callback),
     onChangeChapterEnable: (callback) => listenPayload<boolean>('change-chapter-enable', callback),

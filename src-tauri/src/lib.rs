@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::panic::{self, AssertUnwindSafe};
@@ -32,12 +32,20 @@ const MENU_RESTART_CHAPTER: &str = "restart-chapter";
 const MENU_TOGGLE_TIMER_PAUSE: &str = "toggle-timer-pause";
 const MENU_QUIT: &str = "quit";
 
-static OVERLAY_REAPPLY_GENERATION: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Default)]
 struct AppState {
     storage_path: Option<PathBuf>,
     data: PersistedState,
+    overlay_visible: bool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            storage_path: None,
+            data: PersistedState::default(),
+            overlay_visible: true,
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -409,91 +417,38 @@ fn restart_chapter(app: &tauri::AppHandle) {
     }
 }
 
-fn show_overlay_window(window: &tauri::WebviewWindow) -> Result<(), String> {
-    window.show().map_err(|error| error.to_string())?;
-    let _ = window.set_ignore_cursor_events(true);
+fn configure_overlay_window(window: &tauri::WebviewWindow) {
     let _ = window.set_always_on_top(true);
+    let _ = window.set_ignore_cursor_events(true);
     let _ = window.set_shadow(false);
     let _ = window.set_decorations(false);
     apply_overlay_window_bounds(window);
     apply_macos_overlay_window_level(window);
-    Ok(())
 }
-
-fn reapply_visible_overlay_window(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-
-    if window.is_visible().ok() != Some(true) {
-        return;
-    }
-
-    let _ = window.set_ignore_cursor_events(true);
-    let _ = window.set_always_on_top(true);
-    let _ = window.set_shadow(false);
-    let _ = window.set_decorations(false);
-    apply_overlay_window_bounds(&window);
-    apply_macos_overlay_window_level(&window);
-}
-
-#[cfg(target_os = "macos")]
-fn schedule_overlay_window_reapply(app: &tauri::AppHandle) {
-    let app = app.clone();
-    let generation = OVERLAY_REAPPLY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    thread::spawn(move || {
-        for delay_ms in [50u64, 120, 250, 500, 900, 1500] {
-            thread::sleep(std::time::Duration::from_millis(delay_ms));
-            if OVERLAY_REAPPLY_GENERATION.load(Ordering::SeqCst) != generation {
-                break;
-            }
-            let step_app = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                reapply_visible_overlay_window(&step_app);
-            });
-        }
-    });
-}
-
-#[cfg(not(target_os = "macos"))]
-fn schedule_overlay_window_reapply(_app: &tauri::AppHandle) {}
 
 fn toggle_overlay_visibility(app: &tauri::AppHandle) -> Option<bool> {
-    let Some(window) = app.get_webview_window("main") else {
-        emit_menu_error(app, "Failed to toggle overlay window: main window was not found");
-        return None;
-    };
-
-    match window.is_visible() {
-        Ok(true) => {
-            match window.hide() {
-                Ok(()) => {
-                    OVERLAY_REAPPLY_GENERATION.fetch_add(1, Ordering::SeqCst);
-                    Some(false)
-                }
-                Err(error) => {
-                    emit_menu_error(app, &format!("Failed to hide overlay window: {error}"));
-                    None
-                }
-            }
-        }
-        Ok(false) => {
-            match show_overlay_window(&window) {
-                Ok(()) => {
-                    schedule_overlay_window_reapply(app);
-                    Some(true)
-                }
-                Err(error) => {
-                    emit_menu_error(app, &format!("Failed to show overlay window: {error}"));
-                    None
-                }
-            }
+    let state = app.state::<Mutex<AppState>>();
+    let visible = match state.lock() {
+        Ok(mut state) => {
+            state.overlay_visible = !state.overlay_visible;
+            state.overlay_visible
         }
         Err(error) => {
-            emit_menu_error(app, &format!("Failed to read overlay window visibility: {error}"));
-            None
+            emit_menu_error(app, &format!("Failed to toggle overlay visibility: {error}"));
+            return None;
         }
+    };
+
+    if visible {
+        reassert_overlay_window_level(app);
     }
+
+    if let Err(error) = app.emit("change-overlay-visible", visible) {
+        emit_menu_error(app, &format!("Failed to emit overlay visibility: {error}"));
+        return None;
+    }
+
+    Some(visible)
 }
 
 fn open_chapter_settings_window(app: &tauri::AppHandle) -> Result<(), String> {
@@ -542,18 +497,12 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
-    let initial_settings = app
-        .state::<Mutex<AppState>>()
-        .lock()
-        .map_err(|error| error.to_string())?
-        .data
-        .settings
-        .clone();
+    let (initial_settings, overlay_visible) = {
+        let app_state = app.state::<Mutex<AppState>>();
+        let state = app_state.lock().map_err(|error| error.to_string())?;
 
-    let overlay_visible = app
-        .get_webview_window("main")
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(true);
+        (state.data.settings.clone(), state.overlay_visible)
+    };
 
     let toggle_overlay = CheckMenuItemBuilder::with_id(MENU_TOGGLE_OVERLAY, "オーバーレイを表示/非表示")
         .checked(overlay_visible)
@@ -1162,6 +1111,8 @@ fn apply_macos_overlay_window_level(window: &tauri::WebviewWindow) {
     if let Some(screen) = ns_window.screen() {
         ns_window.setFrame_display(screen.frame(), true);
     }
+    ns_window.orderFrontRegardless();
+    set_overlay_ns_window_level(ns_window);
 }
 
 // ウィンドウレベルとコレクションビヘイビアだけを適用する（フレームには触れない）。
@@ -1178,7 +1129,7 @@ fn set_overlay_ns_window_level(ns_window: &NSWindow) {
 
 // Tauri は webview 初期化時に config の alwaysOnTop を再適用し、
 // ウィンドウレベルをメニューバーより低い値へ戻してしまう。
-// 表示後にレベルだけを再主張して、メニューバー前面を維持する。
+// 起動後の通常イベントではフレームに触らず、レベルだけを再主張する。
 #[cfg(target_os = "macos")]
 fn reassert_overlay_window_level(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -1250,12 +1201,7 @@ pub fn run() {
                 }
 
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_always_on_top(true);
-                    let _ = window.set_ignore_cursor_events(true);
-                    let _ = window.set_shadow(false);
-                    let _ = window.set_decorations(false);
-                    apply_overlay_window_bounds(&window);
-                    apply_macos_overlay_window_level(&window);
+                    configure_overlay_window(&window);
 
                     // フォーカス/移動/リサイズ時に Tauri がレベルを戻すことがあるため、
                     // それらのイベントごとにメニューバー前面レベルを再主張する。

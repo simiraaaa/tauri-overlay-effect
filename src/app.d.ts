@@ -17,6 +17,7 @@ declare global {
 		onGlobalKeyboard: (callback: (event: unknown, keyEvent: GlobalKeyEvent, down: GlobalKeyDownMap) => void) => Unlisten | Promise<Unlisten>;
 		onLog: (callback: (...args: unknown[]) => void) => Unlisten | Promise<Unlisten>;
 		onGlobalMouse: (callback: (event: unknown, mouseEvent: GlobalMouseEvent) => void) => Unlisten | Promise<Unlisten>;
+		onChangeOverlayVisible: (callback: (visible: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeMouseEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeKeyboardEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
