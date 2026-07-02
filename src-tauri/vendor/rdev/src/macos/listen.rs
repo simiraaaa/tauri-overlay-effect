@@ -4,6 +4,7 @@ use crate::rdev::{Event, ListenError};
 use cocoa::base::nil;
 use cocoa::foundation::NSAutoreleasePool;
 use core_graphics::event::{CGEventTapLocation, CGEventType};
+use std::panic::{self, AssertUnwindSafe};
 use std::os::raw::c_void;
 
 static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
@@ -17,16 +18,21 @@ unsafe extern "C" fn raw_callback(
     cg_event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
-    // println!("Event ref {:?}", cg_event_ptr);
-    // let cg_event: CGEvent = transmute_copy::<*mut c_void, CGEvent>(&cg_event_ptr);
-    let opt = KEYBOARD_STATE.lock();
-    if let Ok(mut keyboard) = opt {
-        if let Some(event) = convert(_type, &cg_event, &mut keyboard) {
-            if let Some(callback) = &mut GLOBAL_CALLBACK {
-                callback(event);
+    let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+        // println!("Event ref {:?}", cg_event_ptr);
+        // let cg_event: CGEvent = transmute_copy::<*mut c_void, CGEvent>(&cg_event_ptr);
+        let opt = KEYBOARD_STATE.lock();
+        if let Ok(mut keyboard) = opt {
+            if let Some(event) = convert(_type, &cg_event, &mut keyboard) {
+                // SAFETY: GLOBAL_CALLBACK is written only from this initialization thread
+                // before the run loop starts, and we read it only from this callback thread.
+                let mut callback = unsafe { (&raw mut GLOBAL_CALLBACK).as_mut() };
+                if let Some(callback) = callback.as_mut().and_then(|cb| cb.as_mut()) {
+                    callback(event);
+                }
             }
         }
-    }
+    }));
     // println!("Event ref END {:?}", cg_event_ptr);
     // cg_event_ptr
     cg_event

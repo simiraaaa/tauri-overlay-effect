@@ -79,6 +79,7 @@ extern "C" {
     pub static kCFRunLoopCommonModes: CFRunLoopMode;
 
 }
+#[allow(improper_ctypes_definitions)]
 pub type QCallback = unsafe extern "C" fn(
     proxy: CGEventTapProxy,
     _type: CGEventType,
