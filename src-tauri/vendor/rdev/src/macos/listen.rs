@@ -1,15 +1,11 @@
 use crate::macos::common::*;
 use crate::rdev::{Event, ListenError};
-use cocoa::base::nil;
-use cocoa::foundation::NSAutoreleasePool;
 use core_graphics::event::{CGEventTapLocation, CGEventType};
 use std::panic::{self, AssertUnwindSafe};
 use std::os::raw::c_void;
+use std::ptr;
 
 static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
-
-#[link(name = "Cocoa", kind = "framework")]
-extern "C" {}
 
 unsafe extern "C" fn raw_callback(
     _proxy: CGEventTapProxy,
@@ -22,7 +18,9 @@ unsafe extern "C" fn raw_callback(
         // let cg_event: CGEvent = transmute_copy::<*mut c_void, CGEvent>(&cg_event_ptr);
         let opt = KEYBOARD_STATE.lock();
         if let Ok(mut keyboard) = opt {
-            if let Some(event) = convert(_type, &cg_event, &mut keyboard) {
+            if let Some(Some(event)) = with_cg_event(cg_event, |event| {
+                convert(_type, event, &mut keyboard)
+            }) {
                 // SAFETY: GLOBAL_CALLBACK is written only from this initialization thread
                 // before the run loop starts, and we read it only from this callback thread.
                 let mut callback = unsafe { (&raw mut GLOBAL_CALLBACK).as_mut() };
@@ -44,19 +42,18 @@ where
     unsafe {
         GLOBAL_CALLBACK = Some(Box::new(callback));
 
-        let _pool = NSAutoreleasePool::new(nil);
         let tap = CGEventTapCreate(
             CGEventTapLocation::HID, // HID, Session, AnnotatedSession,
             kCGHeadInsertEventTap,
             CGEventTapOption::ListenOnly,
             kCGEventMaskForAllEvents,
             raw_callback,
-            nil,
+            ptr::null_mut(),
         );
         if tap.is_null() {
             return Err(ListenError::EventTapError);
         }
-        let _loop = CFMachPortCreateRunLoopSource(nil, tap, 0);
+        let _loop = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
         if _loop.is_null() {
             return Err(ListenError::LoopSourceError);
         }
