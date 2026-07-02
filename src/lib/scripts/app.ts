@@ -135,6 +135,7 @@ export const KEYBOARD_LAYOUT_KEY_NAME_TO_DISPLAY_TEXT_MAP: Record<KeyboardLayout
     BackQuote: KEY_CONSTANTS.backQuote,
   },
   jis: {
+    Backslash: KEY_CONSTANTS.jisYen,
     JisYen: KEY_CONSTANTS.jisYen,
     JisUnderscore: KEY_CONSTANTS.jisUnderscore,
     Eisu: KEY_CONSTANTS.eisu,

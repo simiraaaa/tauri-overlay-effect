@@ -122,7 +122,9 @@
 	const schedulePressedKeyIdleReset = () => {
 		clearPressedKeyIdleTimer();
 		pressedKeyIdleTimer = setTimeout(() => {
-			ignoredStaleDownKeys = new Set(lastDownKeys);
+			ignoredStaleDownKeys = new Set(
+				[...lastDownKeys].filter((key) => !MODIFIER_KEYS.has(toDisplayKeyName(key, keyboardLayout))),
+			);
 			pressedKeySet = new Set();
 			pressedKeyIdleTimer = undefined;
 		}, PRESSED_KEY_IDLE_RESET_MS);
