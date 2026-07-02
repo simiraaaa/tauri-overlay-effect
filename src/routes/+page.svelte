@@ -4,7 +4,7 @@
 	import Mouse from "$components/Mouse.svelte";
 	import { dev } from '$app/environment';
 	import { getAppBridge } from "$lib/scripts/app-bridge";
-	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, overlayVisible, settings, toDisplayKeyName } from "$lib/scripts/app";
+	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, inputMonitoringStatus, overlayVisible, settings, toDisplayKeyName } from "$lib/scripts/app";
 	import { onDestroy, onMount } from "svelte";
 
 	type KeyParam = {
@@ -173,6 +173,11 @@
 	});
 
 	let chapterLine = $derived(`${$chapterIndex + 1}. ` + $chapterText.split('\n')[$chapterIndex]);
+	let showInputMonitoringNotice = $derived(
+		$overlayVisible
+		&& $inputMonitoringStatus
+		&& !['starting', 'active'].includes($inputMonitoringStatus.state)
+	);
 </script>
 
 <!-- <svelte:window on:keydown={onKeydown}></svelte:window> -->
@@ -197,6 +202,18 @@
 			{#each logs.slice().reverse() as log}
 				<div>{log}</div>
 			{/each}
+		</div>
+	{/if}
+	{#if showInputMonitoringNotice && $inputMonitoringStatus}
+		<div class="permission-notice">
+			<div class="permission-title">入力監視が有効ではありません</div>
+			<div>{$inputMonitoringStatus.message}</div>
+			{#if $inputMonitoringStatus.guidance}
+				<div>{$inputMonitoringStatus.guidance}</div>
+			{/if}
+			{#if $inputMonitoringStatus.canRetry}
+				<div>許可後、トレイメニューの「入力監視を再試行」を選んでください。</div>
+			{/if}
 		</div>
 	{/if}
 	<div>
@@ -288,6 +305,28 @@
 		opacity: 0.5;
 		position: absolute;
 		margin: auto;
+	}
+
+	.permission-notice {
+		position: absolute;
+		left: 24px;
+		bottom: 24px;
+		max-width: 460px;
+		padding: 14px 16px;
+		border-radius: 12px;
+		background: rgba(24, 24, 24, 0.72);
+		border: 1px solid rgba(255, 255, 255, 0.36);
+		box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+		color: white;
+		font-size: 13px;
+		line-height: 1.6;
+		pointer-events: none;
+	}
+
+	.permission-title {
+		font-size: 14px;
+		font-weight: 700;
+		margin-bottom: 4px;
 	}
 
 </style>
