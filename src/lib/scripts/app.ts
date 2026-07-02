@@ -28,6 +28,7 @@ export const init = async () => {
   };
 
   try {
+    overlayVisible.set(await appBridge.getOverlayVisible());
     const s = await appBridge.getSettings();
     if (s) {
       settings.set(s);

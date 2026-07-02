@@ -17,7 +17,7 @@ use objc2_app_kit::{
 };
 use tauri::{
     menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     Emitter, Manager, PhysicalPosition, PhysicalSize,
 };
 
@@ -132,6 +132,14 @@ fn get_settings(state: tauri::State<'_, Mutex<AppState>>) -> Settings {
         .lock()
         .map(|state| state.data.settings.clone())
         .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_overlay_visible(state: tauri::State<'_, Mutex<AppState>>) -> bool {
+    state
+        .lock()
+        .map(|state| state.overlay_visible)
+        .unwrap_or(true)
 }
 
 #[tauri::command]
@@ -559,8 +567,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     let toggle_overlay_for_menu = toggle_overlay.clone();
-    let toggle_overlay_for_tray = toggle_overlay.clone();
-
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
         .on_menu_event(move |app, event| {
@@ -572,20 +578,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
             }
 
             handle_tray_menu_event(app, event.id().as_ref());
-        })
-        .on_tray_icon_event(move |tray, event| {
-            if matches!(
-                event,
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                }
-            ) {
-                if let Some(visible) = toggle_overlay_visibility(tray.app_handle()) {
-                    let _ = toggle_overlay_for_tray.set_checked(visible);
-                }
-            }
         });
 
     if let Some(icon) = app.default_window_icon().cloned() {
@@ -1167,6 +1159,7 @@ pub fn run() {
     builder
         .manage(Mutex::new(AppState::default()))
         .invoke_handler(tauri::generate_handler![
+            get_overlay_visible,
             get_settings,
             set_settings,
             get_chapter_text,

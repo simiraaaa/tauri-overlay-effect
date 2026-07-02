@@ -24,6 +24,7 @@ declare global {
 		onChangeTimerPaused: (callback: (paused: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterText: (callback: (text: string) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterIndex: (callback: (index: number) => void) => Unlisten | Promise<Unlisten>;
+		getOverlayVisible: () => Promise<boolean>;
 		getSettings: () => Promise<AppData.Settings>;
 		setSettings: (settings: AppData.Settings) => Promise<void>;
 		getChapterText: () => Promise<string>;
