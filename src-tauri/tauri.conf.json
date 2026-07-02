@@ -31,7 +31,25 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
-    "icon": ["../images/icon.png"]
+    "targets": ["app", "dmg"],
+    "icon": ["../images/icon.png"],
+    "macOS": {
+      "hardenedRuntime": true,
+      "entitlements": "./Entitlements.plist",
+      "dmg": {
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        }
+      }
+    }
   }
 }
