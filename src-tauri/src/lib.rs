@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::panic::{self, AssertUnwindSafe};
@@ -31,6 +31,8 @@ const MENU_NEXT_CHAPTER: &str = "next-chapter";
 const MENU_RESTART_CHAPTER: &str = "restart-chapter";
 const MENU_TOGGLE_TIMER_PAUSE: &str = "toggle-timer-pause";
 const MENU_QUIT: &str = "quit";
+
+static OVERLAY_REAPPLY_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 struct AppState {
@@ -407,14 +409,15 @@ fn restart_chapter(app: &tauri::AppHandle) {
     }
 }
 
-fn show_overlay_window(window: &tauri::WebviewWindow) {
-    let _ = window.show();
+fn show_overlay_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|error| error.to_string())?;
     let _ = window.set_ignore_cursor_events(true);
     let _ = window.set_always_on_top(true);
     let _ = window.set_shadow(false);
     let _ = window.set_decorations(false);
     apply_overlay_window_bounds(window);
     apply_macos_overlay_window_level(window);
+    Ok(())
 }
 
 fn reapply_visible_overlay_window(app: &tauri::AppHandle) {
@@ -437,9 +440,13 @@ fn reapply_visible_overlay_window(app: &tauri::AppHandle) {
 #[cfg(target_os = "macos")]
 fn schedule_overlay_window_reapply(app: &tauri::AppHandle) {
     let app = app.clone();
+    let generation = OVERLAY_REAPPLY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     thread::spawn(move || {
         for delay_ms in [50u64, 120, 250, 500, 900, 1500] {
             thread::sleep(std::time::Duration::from_millis(delay_ms));
+            if OVERLAY_REAPPLY_GENERATION.load(Ordering::SeqCst) != generation {
+                break;
+            }
             let step_app = app.clone();
             let _ = app.run_on_main_thread(move || {
                 reapply_visible_overlay_window(&step_app);
@@ -460,7 +467,10 @@ fn toggle_overlay_visibility(app: &tauri::AppHandle) -> Option<bool> {
     match window.is_visible() {
         Ok(true) => {
             match window.hide() {
-                Ok(()) => Some(false),
+                Ok(()) => {
+                    OVERLAY_REAPPLY_GENERATION.fetch_add(1, Ordering::SeqCst);
+                    Some(false)
+                }
                 Err(error) => {
                     emit_menu_error(app, &format!("Failed to hide overlay window: {error}"));
                     None
@@ -468,9 +478,16 @@ fn toggle_overlay_visibility(app: &tauri::AppHandle) -> Option<bool> {
             }
         }
         Ok(false) => {
-            show_overlay_window(&window);
-            schedule_overlay_window_reapply(app);
-            Some(true)
+            match show_overlay_window(&window) {
+                Ok(()) => {
+                    schedule_overlay_window_reapply(app);
+                    Some(true)
+                }
+                Err(error) => {
+                    emit_menu_error(app, &format!("Failed to show overlay window: {error}"));
+                    None
+                }
+            }
         }
         Err(error) => {
             emit_menu_error(app, &format!("Failed to read overlay window visibility: {error}"));
@@ -533,8 +550,13 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .settings
         .clone();
 
+    let overlay_visible = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(true);
+
     let toggle_overlay = CheckMenuItemBuilder::with_id(MENU_TOGGLE_OVERLAY, "オーバーレイを表示/非表示")
-        .checked(true)
+        .checked(overlay_visible)
         .build(app)
         .map_err(|error| error.to_string())?;
     let mouse_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_MOUSE, "マウスクリックを表示")
