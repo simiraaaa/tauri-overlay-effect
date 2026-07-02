@@ -701,7 +701,7 @@ fn normalize_global_mouse_position(
     app: &tauri::AppHandle,
     raw_x: i32,
     raw_y: i32,
-    last_position: &Arc<Mutex<(i32, i32)>>,
+    last_position: &Arc<Mutex<Option<(i32, i32)>>>,
 ) -> (i32, i32) {
     let Some(window) = app.get_webview_window("main") else {
         return (raw_x, raw_y);
@@ -754,45 +754,38 @@ fn normalize_global_mouse_position(
 
     let scaled_x = monitor_offset_x + raw_x as f64 - monitor_left;
     let top_local_y = raw_y as f64 - monitor_top;
+    let bottom_global_y = monitor_height - top_local_y;
     let bottom_local_y = monitor_height - raw_y as f64;
     let scaled_y_from_top = monitor_offset_y + top_local_y;
-    let scaled_y_from_bottom = monitor_offset_y + bottom_local_y;
-
-    let top_candidate = (scaled_x.round() as i32, scaled_y_from_top.round() as i32);
-    let bottom_candidate = (scaled_x.round() as i32, scaled_y_from_bottom.round() as i32);
-
-    let mut x = bottom_candidate.0;
-    let mut y = bottom_candidate.1;
-
-    if let Ok((last_x, last_y)) = last_position.lock().map(|position| *position) {
-        let top_delta = (top_candidate.0 - last_x).abs() + (top_candidate.1 - last_y).abs();
-        let bottom_delta = (bottom_candidate.0 - last_x).abs() + (bottom_candidate.1 - last_y).abs();
-
-        if top_delta < bottom_delta {
-            x = top_candidate.0;
-            y = top_candidate.1;
-        }
-    }
+    let scaled_y_from_bottom_global = monitor_offset_y + bottom_global_y;
+    let scaled_y_from_bottom_local = monitor_offset_y + bottom_local_y;
 
     let max_x = desktop.width as i32;
     let max_y = desktop.height as i32;
 
-    if x < 0 {
-        x = 0;
-    }
-    if x > max_x {
-        x = max_x;
-    }
-    if y < 0 {
-        y = 0;
-    }
-    if y > max_y {
-        y = max_y;
-    }
+    let candidates = [
+        (scaled_x.round() as i32, scaled_y_from_top.round() as i32),
+        (scaled_x.round() as i32, scaled_y_from_bottom_global.round() as i32),
+        (scaled_x.round() as i32, scaled_y_from_bottom_local.round() as i32),
+    ];
+
+    let previous = last_position.lock().ok().and_then(|position| *position);
+    let (x, y) = previous
+        .and_then(|(last_x, last_y)| {
+            candidates
+                .iter()
+                .filter(|(_, y)| *y >= 0 && *y <= max_y)
+                .min_by_key(|(x, y)| (x - last_x).abs() + (y - last_y).abs())
+                .copied()
+        })
+        .unwrap_or(candidates[0]);
+
+    let x = x.clamp(0, max_x);
+    let y = y.clamp(0, max_y);
 
     let normalized = (x, y);
     if let Ok(mut last) = last_position.lock() {
-        *last = normalized;
+        *last = Some(normalized);
     }
 
     normalized
@@ -802,7 +795,7 @@ fn normalize_global_mouse_position(
 fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>) -> Result<(), String> {
     let is_button_down = Arc::new(AtomicBool::new(false));
     let cursor_position = Arc::new(Mutex::new((0i32, 0i32)));
-    let normalized_position = Arc::new(Mutex::new((0i32, 0i32)));
+    let normalized_position = Arc::new(Mutex::new(None::<(i32, i32)>));
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
     let detected_keyboard_layout = Arc::new(Mutex::new(KeyboardLayout::Unknown));
