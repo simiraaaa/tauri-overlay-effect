@@ -884,7 +884,11 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
         MENU_RESTART_CHAPTER => restart_chapter(app),
         MENU_TOGGLE_CHAPTER_PAUSE => toggle_timer_paused(app),
         MENU_COPY_CHAPTER_LAPS => copy_chapter_lap_text(app),
-        MENU_RETRY_INPUT_MONITORING => start_global_input_monitoring(app.clone()),
+        MENU_RETRY_INPUT_MONITORING => {
+            if let Err(error) = retry_input_monitoring(app.clone()) {
+                emit_menu_error(app, &format!("Failed to retry input monitoring: {error}"));
+            }
+        }
         MENU_QUIT => app.exit(0),
         _ => {}
     }
