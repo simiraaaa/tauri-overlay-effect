@@ -1,10 +1,11 @@
 <script lang="ts">
 	import Chapter from "$components/Chapter.svelte";
+	import ChapterSettingPanel from "$components/ChapterSettingPanel.svelte";
 	import Keyboard from "$components/Keyboard.svelte";
 	import Mouse from "$components/Mouse.svelte";
 	import { dev } from '$app/environment';
 	import { getAppBridge } from "$lib/scripts/app-bridge";
-	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, inputMonitoringStatus, overlayVisible, settings, toDisplayKeyName } from "$lib/scripts/app";
+	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterSettingVisible, chapterText, inputMonitoringStatus, overlayVisible, settings, toDisplayKeyName } from "$lib/scripts/app";
 	import { onDestroy, onMount } from "svelte";
 
 	type KeyParam = {
@@ -49,6 +50,7 @@
 	const keydownHandler = (_e: unknown, e: GlobalKeyEvent, down: GlobalKeyDownMap) => {
 		if (!$overlayVisible) return;
 		if (!$settings.enableKeyboard) return;
+		if ($chapterSettingVisible) return;
 
 		if (e.name?.startsWith('MOUSE')) {
 			return;
@@ -188,6 +190,12 @@
 </svelte:head>
 
 <section>
+	{#if $chapterSettingVisible}
+		<div class="chapter-setting-panel">
+			<ChapterSettingPanel />
+		</div>
+	{/if}
+
 	{#if $overlayVisible && $settings.enableChapter}
 		<div class="chapter-container">
 			<Chapter text={chapterLine}></Chapter>
@@ -327,6 +335,19 @@
 		font-size: 14px;
 		font-weight: 700;
 		margin-bottom: 4px;
+	}
+
+	.chapter-setting-panel {
+		position: absolute;
+		inset: 0;
+		z-index: 100;
+		width: min(420px, calc(100vw - 48px));
+		height: min(560px, calc(100vh - 48px));
+		margin: auto;
+		border-radius: 12px;
+		overflow: hidden;
+		box-shadow: 0 16px 60px rgba(0, 0, 0, 0.35);
+		pointer-events: auto;
 	}
 
 </style>

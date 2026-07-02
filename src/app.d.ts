@@ -19,6 +19,7 @@ declare global {
 		onGlobalMouse: (callback: (event: unknown, mouseEvent: GlobalMouseEvent) => void) => Unlisten | Promise<Unlisten>;
 		onInputMonitoringStatus: (callback: (status: InputMonitoringStatus) => void) => Unlisten | Promise<Unlisten>;
 		onChangeOverlayVisible: (callback: (visible: boolean) => void) => Unlisten | Promise<Unlisten>;
+		onChangeChapterSettingVisible: (callback: (visible: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeMouseEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeKeyboardEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
@@ -26,6 +27,8 @@ declare global {
 		onChangeChapterText: (callback: (text: string) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterIndex: (callback: (index: number) => void) => Unlisten | Promise<Unlisten>;
 		getOverlayVisible: () => Promise<boolean>;
+		getChapterSettingVisible: () => Promise<boolean>;
+		setChapterSettingVisible: (visible: boolean) => Promise<void>;
 		getInputMonitoringStatus: () => Promise<InputMonitoringStatus>;
 		retryInputMonitoring: () => Promise<void>;
 		getSettings: () => Promise<AppData.Settings>;

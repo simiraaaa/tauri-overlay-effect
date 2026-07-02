@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for the overlay window.",
-  "windows": ["main", "chapter-setting"],
-  "permissions": ["core:default", "core:window:allow-hide"]
+  "windows": ["main"],
+  "permissions": ["core:default"]
 }

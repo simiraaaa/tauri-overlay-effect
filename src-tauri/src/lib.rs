@@ -21,7 +21,7 @@ use objc2_app_kit::{
 use tauri::{
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::TrayIconBuilder,
-    Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    Emitter, Manager, PhysicalPosition, PhysicalSize,
 };
 
 const MENU_TOGGLE_OVERLAY: &str = "toggle-overlay";
@@ -36,16 +36,14 @@ const MENU_TOGGLE_CHAPTER_PAUSE: &str = "toggle-chapter-pause";
 const MENU_COPY_CHAPTER_LAPS: &str = "copy-chapter-laps";
 const MENU_RETRY_INPUT_MONITORING: &str = "retry-input-monitoring";
 const MENU_QUIT: &str = "quit";
-const CHAPTER_SETTING_WINDOW_LABEL: &str = "chapter-setting";
-const CHAPTER_SETTING_ROUTE: &str = "chapter-setting";
 
 static INPUT_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
-static CHAPTER_SETTING_OPENED: AtomicBool = AtomicBool::new(false);
 
 struct AppState {
     storage_path: Option<PathBuf>,
     data: PersistedState,
     overlay_visible: bool,
+    chapter_setting_visible: bool,
     input_monitoring_status: InputMonitoringStatus,
     input_monitoring_attempt: u64,
     tray_menu_items: Option<TrayMenuItems>,
@@ -72,6 +70,7 @@ impl Default for AppState {
             storage_path: None,
             data: PersistedState::default(),
             overlay_visible: true,
+            chapter_setting_visible: false,
             input_monitoring_status: InputMonitoringStatus {
                 state: "starting",
                 message: "Input monitoring has not started yet.".to_string(),
@@ -207,6 +206,19 @@ fn get_overlay_visible(state: tauri::State<'_, Mutex<AppState>>) -> bool {
         .lock()
         .map(|state| state.overlay_visible)
         .unwrap_or(true)
+}
+
+#[tauri::command]
+fn get_chapter_setting_visible(state: tauri::State<'_, Mutex<AppState>>) -> bool {
+    state
+        .lock()
+        .map(|state| state.chapter_setting_visible)
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_chapter_setting_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    set_chapter_setting_visible_inner(&app, visible)
 }
 
 #[tauri::command]
@@ -767,32 +779,27 @@ fn copy_chapter_lap_text(app: &tauri::AppHandle) {
 }
 
 fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
-    CHAPTER_SETTING_OPENED.store(true, Ordering::SeqCst);
+    set_chapter_setting_visible_inner(app, true)
+}
 
-    if let Some(window) = app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL) {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
+fn set_chapter_setting_visible_inner(app: &tauri::AppHandle, visible: bool) -> Result<(), String> {
+    {
+        let state = app.state::<Mutex<AppState>>();
+        let mut state = state.lock().map_err(|error| error.to_string())?;
+        state.chapter_setting_visible = visible;
     }
 
-    let main_window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "Main window is not available.".to_string())?;
-    let window = WebviewWindowBuilder::new(
-        &main_window,
-        CHAPTER_SETTING_WINDOW_LABEL,
-        WebviewUrl::App(CHAPTER_SETTING_ROUTE.into()),
-    )
-    .title("チャプター設定")
-    .inner_size(400.0, 500.0)
-    .resizable(true)
-    .always_on_top(true)
-    .build()
-    .map_err(|error| error.to_string())?;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_ignore_cursor_events(!visible);
+        if visible {
+            let _ = window.show();
+            let _ = window.set_focus();
+            reassert_overlay_window_level(app);
+        }
+    }
 
-    let _ = window.center();
-    let _ = window.set_focus();
-    Ok(())
+    app.emit("change-chapter-setting-visible", visible)
+        .map_err(|error| error.to_string())
 }
 
 fn configure_overlay_window(window: &tauri::WebviewWindow) {
@@ -1014,10 +1021,6 @@ fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
 }
 
 fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap<String, bool>) {
-    if is_chapter_setting_focused(app) {
-        return;
-    }
-
     let payload = (event, down);
     if let Some(window) = app.get_webview_window("main") {
         if window.emit("global-key", &payload).is_ok() {
@@ -1028,12 +1031,6 @@ fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap
     if let Err(error) = app.emit("global-key", payload) {
         eprintln!("Failed to emit global keyboard event: {error:?}");
     }
-}
-
-fn is_chapter_setting_focused(app: &tauri::AppHandle) -> bool {
-    app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL)
-        .and_then(|window| window.is_focused().ok())
-        .unwrap_or(false)
 }
 
 fn emit_log(app: &tauri::AppHandle, message: &str) {
@@ -1329,10 +1326,6 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyPress(key) => {
-                    if CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
-                        return;
-                    }
-
                     let keyboard_layout = update_keyboard_layout(
                         &detected_keyboard_layout_for_events,
                         key,
@@ -1362,10 +1355,6 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyRelease(key) => {
-                    if CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
-                        return;
-                    }
-
                     let keyboard_layout = update_keyboard_layout(
                         &detected_keyboard_layout_for_events,
                         key,
@@ -1790,6 +1779,8 @@ pub fn run() {
         .manage(Mutex::new(AppState::default()))
         .invoke_handler(tauri::generate_handler![
             get_overlay_visible,
+            get_chapter_setting_visible,
+            set_chapter_setting_visible,
             get_input_monitoring_status,
             retry_input_monitoring,
             get_settings,
