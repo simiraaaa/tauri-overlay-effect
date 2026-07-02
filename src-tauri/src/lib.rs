@@ -37,6 +37,12 @@ struct AppState {
     input_monitoring_attempt: u64,
 }
 
+struct TrayCheckState {
+    overlay_visible: bool,
+    mouse_enabled: bool,
+    keyboard_enabled: bool,
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
@@ -391,6 +397,22 @@ fn emit_menu_error(app: &tauri::AppHandle, message: &str) {
     emit_log(app, message);
 }
 
+fn current_tray_check_state(app: &tauri::AppHandle) -> Option<TrayCheckState> {
+    let state = app.state::<Mutex<AppState>>();
+    let result = match state.lock() {
+        Ok(state) => Some(TrayCheckState {
+            overlay_visible: state.overlay_visible,
+            mouse_enabled: state.data.settings.enable_mouse,
+            keyboard_enabled: state.data.settings.enable_keyboard,
+        }),
+        Err(error) => {
+            emit_menu_error(app, &format!("Failed to read tray check state: {error}"));
+            None
+        }
+    };
+    result
+}
+
 fn toggle_mouse_enabled(app: &tauri::AppHandle) -> Option<bool> {
     match update_persisted_settings(app, |settings| {
         settings.enable_mouse = !settings.enable_mouse;
@@ -529,21 +551,27 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .menu(&menu)
         .on_menu_event(move |app, event| {
             if event.id().as_ref() == MENU_TOGGLE_OVERLAY {
-                if let Some(visible) = toggle_overlay_visibility(app) {
+                let visible = toggle_overlay_visibility(app)
+                    .or_else(|| current_tray_check_state(app).map(|state| state.overlay_visible));
+                if let Some(visible) = visible {
                     let _ = toggle_overlay_for_menu.set_checked(visible);
                 }
                 return;
             }
 
             if event.id().as_ref() == MENU_TOGGLE_MOUSE {
-                if let Some(enabled) = toggle_mouse_enabled(app) {
+                let enabled = toggle_mouse_enabled(app)
+                    .or_else(|| current_tray_check_state(app).map(|state| state.mouse_enabled));
+                if let Some(enabled) = enabled {
                     let _ = mouse_enabled_for_menu.set_checked(enabled);
                 }
                 return;
             }
 
             if event.id().as_ref() == MENU_TOGGLE_KEYBOARD {
-                if let Some(enabled) = toggle_keyboard_enabled(app) {
+                let enabled = toggle_keyboard_enabled(app)
+                    .or_else(|| current_tray_check_state(app).map(|state| state.keyboard_enabled));
+                if let Some(enabled) = enabled {
                     let _ = keyboard_enabled_for_menu.set_checked(enabled);
                 }
                 return;
