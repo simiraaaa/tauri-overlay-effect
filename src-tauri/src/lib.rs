@@ -111,6 +111,21 @@ fn get_settings(state: tauri::State<'_, Mutex<AppState>>) -> Settings {
 }
 
 #[tauri::command]
+fn set_settings(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+    settings: Settings,
+) -> Result<(), String> {
+    let mut state = state.lock().map_err(|error| error.to_string())?;
+    let mut next = state.data.clone();
+    next.settings = settings.clone();
+    save_persisted_state(&state.storage_path, &next)?;
+    state.data = next;
+    emit_settings_changed(&app, &settings);
+    Ok(())
+}
+
+#[tauri::command]
 fn get_chapter_text(state: tauri::State<'_, Mutex<AppState>>) -> String {
     state
         .lock()
@@ -125,13 +140,15 @@ fn set_chapter_text(
     text: String,
 ) -> Result<(), String> {
     let mut state = state.lock().map_err(|error| error.to_string())?;
-    state.data.chapter_text = text.clone();
+    let mut next = state.data.clone();
+    next.chapter_text = text.clone();
 
-    let last = last_chapter_index(&state.data.chapter_text);
-    if state.data.chapter_index > last {
-        state.data.chapter_index = last;
+    let last = last_chapter_index(&next.chapter_text);
+    if next.chapter_index > last {
+        next.chapter_index = last;
     }
-    save_app_state(&state)?;
+    save_persisted_state(&state.storage_path, &next)?;
+    state.data = next;
 
     let _ = app.emit("change-chapter-text", text);
     let _ = app.emit("change-chapter-index", state.data.chapter_index);
@@ -153,8 +170,10 @@ fn set_chapter_index(
     index: usize,
 ) -> Result<ChapterIndexResult, String> {
     let mut state = state.lock().map_err(|error| error.to_string())?;
-    let result = set_chapter_index_inner(&mut state.data, index);
-    save_app_state(&state)?;
+    let mut next = state.data.clone();
+    let result = set_chapter_index_inner(&mut next, index);
+    save_persisted_state(&state.storage_path, &next)?;
+    state.data = next;
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
@@ -168,8 +187,10 @@ fn add_chapter_index(
     let mut state = state.lock().map_err(|error| error.to_string())?;
     let current = state.data.chapter_index as isize;
     let next = current.saturating_add(num).max(0) as usize;
-    let result = set_chapter_index_inner(&mut state.data, next);
-    save_app_state(&state)?;
+    let mut next_state = state.data.clone();
+    let result = set_chapter_index_inner(&mut next_state, next);
+    save_persisted_state(&state.storage_path, &next_state)?;
+    state.data = next_state;
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
@@ -190,10 +211,17 @@ fn last_chapter_index(text: &str) -> usize {
 
 fn initialize_persisted_state(app: &tauri::AppHandle) -> Result<(), String> {
     let storage_path = persisted_state_path(app)?;
-    let data = load_persisted_state(&storage_path).unwrap_or_else(|error| {
-        eprintln!("Failed to read persisted app state: {error}");
-        PersistedState::default()
-    });
+    let data = match load_persisted_state(&storage_path) {
+        Ok(data) => data,
+        Err(error) => {
+            let quarantined_path = quarantine_persisted_state(&storage_path)?;
+            eprintln!(
+                "Failed to read persisted app state: {error}. Moved the broken file to {}",
+                quarantined_path.display()
+            );
+            PersistedState::default()
+        }
+    };
     let state = app.state::<Mutex<AppState>>();
     let mut state = state.lock().map_err(|error| error.to_string())?;
     state.storage_path = Some(storage_path);
@@ -216,6 +244,20 @@ fn load_persisted_state(path: &PathBuf) -> Result<PersistedState, String> {
     serde_json::from_str::<PersistedState>(&contents).map_err(|error| error.to_string())
 }
 
+fn quarantine_persisted_state(path: &PathBuf) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Ok(path.clone());
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let quarantined_path = path.with_extension(format!("json.invalid-{timestamp}"));
+    fs::rename(path, &quarantined_path).map_err(|error| error.to_string())?;
+    Ok(quarantined_path)
+}
+
 fn normalize_persisted_state(mut state: PersistedState) -> PersistedState {
     let last = last_chapter_index(&state.chapter_text);
     if state.chapter_index > last {
@@ -224,8 +266,8 @@ fn normalize_persisted_state(mut state: PersistedState) -> PersistedState {
     state
 }
 
-fn save_app_state(state: &AppState) -> Result<(), String> {
-    let Some(path) = &state.storage_path else {
+fn save_persisted_state(path: &Option<PathBuf>, data: &PersistedState) -> Result<(), String> {
+    let Some(path) = path else {
         return Ok(());
     };
 
@@ -233,11 +275,18 @@ fn save_app_state(state: &AppState) -> Result<(), String> {
         fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     }
 
-    let contents = serde_json::to_string_pretty(&state.data).map_err(|error| error.to_string())?;
+    let contents = serde_json::to_string_pretty(data).map_err(|error| error.to_string())?;
     let temporary_path = path.with_extension("json.tmp");
     fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
     fs::rename(&temporary_path, path).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn emit_settings_changed(app: &tauri::AppHandle, settings: &Settings) {
+    let _ = app.emit("change-mouse-enable", settings.enable_mouse);
+    let _ = app.emit("change-keyboard-enable", settings.enable_keyboard);
+    let _ = app.emit("change-chapter-enable", settings.enable_chapter);
+    let _ = app.emit("change-timer-paused", settings.timer_paused);
 }
 
 fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
@@ -779,6 +828,7 @@ pub fn run() {
         .manage(Mutex::new(AppState::default()))
         .invoke_handler(tauri::generate_handler![
             get_settings,
+            set_settings,
             get_chapter_text,
             set_chapter_text,
             get_chapter_index,
