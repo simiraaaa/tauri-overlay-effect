@@ -42,15 +42,25 @@
     const text = getFormattedText();
     const bridge = appBridge || (await getAppBridge());
     if (!bridge) return;
-    await bridge.setChapterText(text);
-    saved = true;
+    try {
+      await bridge.setChapterText(text);
+      saved = true;
+    } catch (error) {
+      console.error(error);
+      saved = false;
+    }
   };
 
   const saveIndex = async () => {
     const bridge = appBridge || (await getAppBridge());
     if (!bridge) return;
-    await bridge.setChapterIndex(lineNumber - 1);
-    saved = true;
+    try {
+      await bridge.setChapterIndex(lineNumber - 1);
+      saved = true;
+    } catch (error) {
+      console.error(error);
+      saved = false;
+    }
   };
 
 	const debouncedSave = debounce(save, 250);

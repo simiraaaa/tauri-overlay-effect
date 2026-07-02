@@ -268,6 +268,7 @@ fn set_chapter_text(
     let result = set_chapter_index_inner(&mut next, current_index);
     save_persisted_state(&state.storage_path, &next)?;
     state.data = next;
+    drop(state);
 
     let _ = app.emit("change-chapter-text", text);
     let _ = app.emit("change-chapter-index", result.index);
@@ -293,6 +294,8 @@ fn set_chapter_index(
     let result = set_chapter_index_inner(&mut next, index);
     save_persisted_state(&state.storage_path, &next)?;
     state.data = next;
+    drop(state);
+
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
@@ -310,6 +313,8 @@ fn add_chapter_index(
     let result = set_chapter_index_inner(&mut next_state, next);
     save_persisted_state(&state.storage_path, &next_state)?;
     state.data = next_state;
+    drop(state);
+
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
