@@ -17,6 +17,7 @@ declare global {
 		onGlobalKeyboard: (callback: (event: unknown, keyEvent: GlobalKeyEvent, down: GlobalKeyDownMap) => void) => Unlisten | Promise<Unlisten>;
 		onLog: (callback: (...args: unknown[]) => void) => Unlisten | Promise<Unlisten>;
 		onGlobalMouse: (callback: (event: unknown, mouseEvent: GlobalMouseEvent) => void) => Unlisten | Promise<Unlisten>;
+		onInputMonitoringStatus: (callback: (status: InputMonitoringStatus) => void) => Unlisten | Promise<Unlisten>;
 		onChangeOverlayVisible: (callback: (visible: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeMouseEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
 		onChangeKeyboardEnable: (callback: (enable: boolean) => void) => Unlisten | Promise<Unlisten>;
@@ -25,6 +26,8 @@ declare global {
 		onChangeChapterText: (callback: (text: string) => void) => Unlisten | Promise<Unlisten>;
 		onChangeChapterIndex: (callback: (index: number) => void) => Unlisten | Promise<Unlisten>;
 		getOverlayVisible: () => Promise<boolean>;
+		getInputMonitoringStatus: () => Promise<InputMonitoringStatus>;
+		retryInputMonitoring: () => Promise<void>;
 		getSettings: () => Promise<AppData.Settings>;
 		setSettings: (settings: AppData.Settings) => Promise<void>;
 		getChapterText: () => Promise<string>;
@@ -53,6 +56,13 @@ declare global {
 			_nameRaw?: string;
 		};
 		[key: string]: unknown;
+	}
+
+	interface InputMonitoringStatus {
+		state: 'starting' | 'active' | 'waiting' | 'failed' | 'disabled' | 'unsupported' | string;
+		message: string;
+		guidance?: string;
+		canRetry: boolean;
 	}
 
 	namespace AppData {

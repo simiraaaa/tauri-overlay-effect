@@ -15,6 +15,7 @@ const noopBridge: AppBridge = {
   onGlobalKeyboard: () => noopUnlisten,
   onLog: () => noopUnlisten,
   onGlobalMouse: () => noopUnlisten,
+  onInputMonitoringStatus: () => noopUnlisten,
   onChangeOverlayVisible: () => noopUnlisten,
   onChangeMouseEnable: () => noopUnlisten,
   onChangeKeyboardEnable: () => noopUnlisten,
@@ -23,6 +24,13 @@ const noopBridge: AppBridge = {
   onChangeChapterText: () => noopUnlisten,
   onChangeChapterIndex: () => noopUnlisten,
   getOverlayVisible: async () => true,
+  getInputMonitoringStatus: async () => ({
+    state: 'active',
+    message: 'Input monitoring is not managed by the noop bridge.',
+    guidance: undefined,
+    canRetry: false,
+  }),
+  retryInputMonitoring: async () => {},
   getSettings: async () => defaultSettings,
   setSettings: async () => {},
   getChapterText: async () => "",
@@ -44,7 +52,7 @@ export const getAppBridge = async (): Promise<AppBridge | undefined> => {
 
 const createAppBridge = async (): Promise<AppBridge> => {
   if (globalThis.electron) {
-    return globalThis.electron;
+    return withBridgeFallbacks(globalThis.electron);
   }
 
   if (isTauriRuntime()) {
@@ -52,6 +60,13 @@ const createAppBridge = async (): Promise<AppBridge> => {
   }
 
   return noopBridge;
+};
+
+const withBridgeFallbacks = (bridge: Partial<AppBridge>): AppBridge => {
+  return {
+    ...noopBridge,
+    ...bridge,
+  };
 };
 
 const isTauriRuntime = (): boolean => {
@@ -85,6 +100,7 @@ const createTauriBridge = async (): Promise<AppBridge> => {
     onGlobalMouse: (callback) => listenPayload('global-mouse', (payload) => {
       callback({}, payload as GlobalMouseEvent);
     }),
+    onInputMonitoringStatus: (callback) => listenPayload<InputMonitoringStatus>('input-monitoring-status', callback),
     onChangeOverlayVisible: (callback) => listenPayload<boolean>('change-overlay-visible', callback),
     onChangeMouseEnable: (callback) => listenPayload<boolean>('change-mouse-enable', callback),
     onChangeKeyboardEnable: (callback) => listenPayload<boolean>('change-keyboard-enable', callback),
@@ -93,6 +109,8 @@ const createTauriBridge = async (): Promise<AppBridge> => {
     onChangeChapterText: (callback) => listenPayload<string>('change-chapter-text', callback),
     onChangeChapterIndex: (callback) => listenPayload<number>('change-chapter-index', callback),
     getOverlayVisible: () => invoke('get_overlay_visible'),
+    getInputMonitoringStatus: () => invoke('get_input_monitoring_status'),
+    retryInputMonitoring: () => invoke('retry_input_monitoring'),
     getSettings: () => invoke('get_settings'),
     setSettings: (settings) => invoke('set_settings', { settings }),
     getChapterText: () => invoke('get_chapter_text'),

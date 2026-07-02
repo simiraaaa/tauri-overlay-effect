@@ -30,12 +30,17 @@ const MENU_PREVIOUS_CHAPTER: &str = "previous-chapter";
 const MENU_NEXT_CHAPTER: &str = "next-chapter";
 const MENU_RESTART_CHAPTER: &str = "restart-chapter";
 const MENU_TOGGLE_TIMER_PAUSE: &str = "toggle-timer-pause";
+const MENU_RETRY_INPUT_MONITORING: &str = "retry-input-monitoring";
 const MENU_QUIT: &str = "quit";
+
+static INPUT_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct AppState {
     storage_path: Option<PathBuf>,
     data: PersistedState,
     overlay_visible: bool,
+    input_monitoring_status: InputMonitoringStatus,
+    input_monitoring_attempt: u64,
 }
 
 impl Default for AppState {
@@ -44,6 +49,13 @@ impl Default for AppState {
             storage_path: None,
             data: PersistedState::default(),
             overlay_visible: true,
+            input_monitoring_status: InputMonitoringStatus {
+                state: "starting",
+                message: "Input monitoring has not started yet.".to_string(),
+                guidance: None,
+                can_retry: false,
+            },
+            input_monitoring_attempt: 0,
         }
     }
 }
@@ -98,6 +110,15 @@ struct MouseEvent {
     event_type: &'static str,
     x: i32,
     y: i32,
+}
+
+#[derive(Clone, Serialize)]
+struct InputMonitoringStatus {
+    state: &'static str,
+    message: String,
+    guidance: Option<String>,
+    #[serde(rename = "canRetry")]
+    can_retry: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -156,6 +177,25 @@ fn get_overlay_visible(state: tauri::State<'_, Mutex<AppState>>) -> bool {
         .lock()
         .map(|state| state.overlay_visible)
         .unwrap_or(true)
+}
+
+#[tauri::command]
+fn get_input_monitoring_status(state: tauri::State<'_, Mutex<AppState>>) -> InputMonitoringStatus {
+    state
+        .lock()
+        .map(|state| state.input_monitoring_status.clone())
+        .unwrap_or(InputMonitoringStatus {
+            state: "failed",
+            message: "Failed to read input monitoring status.".to_string(),
+            guidance: Some("Restart the app and check macOS input permissions if this persists.".to_string()),
+            can_retry: true,
+        })
+}
+
+#[tauri::command]
+fn retry_input_monitoring(app: tauri::AppHandle) -> Result<(), String> {
+    start_global_input_monitoring(app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -515,6 +555,7 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
         MENU_NEXT_CHAPTER => move_chapter_index(app, 1),
         MENU_RESTART_CHAPTER => restart_chapter(app),
         MENU_TOGGLE_TIMER_PAUSE => toggle_timer_paused(app),
+        MENU_RETRY_INPUT_MONITORING => start_global_input_monitoring(app.clone()),
         MENU_QUIT => app.exit(0),
         _ => {}
     }
@@ -562,6 +603,10 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         MenuItemBuilder::with_id(MENU_TOGGLE_TIMER_PAUSE, "タイマー一時停止/再開")
             .build(app)
             .map_err(|error| error.to_string())?;
+    let retry_input_monitoring =
+        MenuItemBuilder::with_id(MENU_RETRY_INPUT_MONITORING, "入力監視を再試行")
+            .build(app)
+            .map_err(|error| error.to_string())?;
     let quit = MenuItemBuilder::with_id(MENU_QUIT, "終了する")
         .build(app)
         .map_err(|error| error.to_string())?;
@@ -577,6 +622,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
             &next_chapter,
             &restart_chapter,
             &toggle_timer_pause,
+            &retry_input_monitoring,
             &quit,
         ])
         .build()
@@ -647,6 +693,46 @@ fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap
 
 fn emit_log(app: &tauri::AppHandle, message: &str) {
     let _ = app.emit("log", message.to_string());
+}
+
+fn emit_input_monitoring_status(app: &tauri::AppHandle, status: InputMonitoringStatus) {
+    if let Ok(mut state) = app.state::<Mutex<AppState>>().lock() {
+        state.input_monitoring_status = status.clone();
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        if window.emit("input-monitoring-status", &status).is_ok() {
+            return;
+        }
+    }
+
+    if let Err(error) = app.emit("input-monitoring-status", status) {
+        eprintln!("Failed to emit input monitoring status: {error:?}");
+    }
+}
+
+fn current_input_monitoring_state(app: &tauri::AppHandle) -> Option<&'static str> {
+    app.state::<Mutex<AppState>>()
+        .lock()
+        .ok()
+        .map(|state| state.input_monitoring_status.state)
+}
+
+fn next_input_monitoring_attempt(app: &tauri::AppHandle) -> u64 {
+    match app.state::<Mutex<AppState>>().lock() {
+        Ok(mut state) => {
+            state.input_monitoring_attempt = state.input_monitoring_attempt.saturating_add(1);
+            state.input_monitoring_attempt
+        }
+        Err(_) => 0,
+    }
+}
+
+fn current_input_monitoring_attempt(app: &tauri::AppHandle) -> u64 {
+    app.state::<Mutex<AppState>>()
+        .lock()
+        .map(|state| state.input_monitoring_attempt)
+        .unwrap_or_default()
 }
 
 fn overlay_desktop_bounds(window: &tauri::WebviewWindow) -> Option<OverlayBounds> {
@@ -815,7 +901,20 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
 
     let listener = move |event: Event| {
         if let Err(error) = panic::catch_unwind(AssertUnwindSafe(|| {
-            event_seen.store(true, Ordering::SeqCst);
+            if event_seen
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                emit_input_monitoring_status(
+                    &app_for_events,
+                    InputMonitoringStatus {
+                        state: "active",
+                        message: "Global input monitoring is active.".to_string(),
+                        guidance: None,
+                        can_retry: false,
+                    },
+                );
+            }
 
             match event.event_type {
                 EventType::MouseMove { x, y } => {
@@ -959,6 +1058,112 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
 #[cfg(not(target_os = "macos"))]
 fn spawn_global_input_events(_app: tauri::AppHandle, _event_seen: Arc<AtomicBool>) -> Result<(), String> {
     Ok(())
+}
+
+fn start_global_input_monitoring(app: tauri::AppHandle) {
+    #[cfg(not(target_os = "macos"))]
+    {
+        emit_input_monitoring_status(
+            &app,
+            InputMonitoringStatus {
+                state: "unsupported",
+                message: "Global input monitoring is not implemented on this platform yet.".to_string(),
+                guidance: Some("The current Tauri migration prioritizes macOS. Windows/Linux support is planned for a later phase.".to_string()),
+                can_retry: false,
+            },
+        );
+        return;
+    }
+
+    if std::env::var("OVERLAY_DISABLE_MOUSE_LISTENER").ok().as_deref() == Some("1") {
+        emit_input_monitoring_status(
+            &app,
+            InputMonitoringStatus {
+                state: "disabled",
+                message: "Global input monitoring is disabled by OVERLAY_DISABLE_MOUSE_LISTENER=1.".to_string(),
+                guidance: Some("Unset OVERLAY_DISABLE_MOUSE_LISTENER and restart the app to enable input monitoring.".to_string()),
+                can_retry: false,
+            },
+        );
+        eprintln!("Global mouse listener disabled by OVERLAY_DISABLE_MOUSE_LISTENER=1");
+        return;
+    }
+
+    if INPUT_LISTENER_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        emit_input_monitoring_status(
+            &app,
+            InputMonitoringStatus {
+                state: "starting",
+                message: "Global input monitoring is already starting or active.".to_string(),
+                guidance: None,
+                can_retry: false,
+            },
+        );
+        return;
+    }
+
+    let attempt = next_input_monitoring_attempt(&app);
+
+    emit_input_monitoring_status(
+        &app,
+        InputMonitoringStatus {
+            state: "starting",
+            message: "Starting global input monitoring.".to_string(),
+            guidance: None,
+            can_retry: false,
+        },
+    );
+
+    let listener_app = app.clone();
+    let event_seen = Arc::new(AtomicBool::new(false));
+    let event_seen_for_listener = Arc::clone(&event_seen);
+    let watchdog_app = app.clone();
+    let event_seen_for_watchdog = Arc::clone(&event_seen);
+
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_secs(4));
+        if !event_seen_for_watchdog.load(Ordering::SeqCst)
+            && current_input_monitoring_attempt(&watchdog_app) == attempt
+            && current_input_monitoring_state(&watchdog_app) == Some("starting")
+        {
+            emit_input_monitoring_status(
+                &watchdog_app,
+                InputMonitoringStatus {
+                    state: "waiting",
+                    message: "Global input monitoring has not received any input events yet.".to_string(),
+                    guidance: Some(
+                        "Move the mouse or press a key to confirm monitoring. If effects do not appear, allow this app in macOS System Settings > Privacy & Security > Accessibility and Input Monitoring, then restart the app."
+                            .to_string(),
+                    ),
+                    can_retry: false,
+                },
+            );
+        }
+    });
+
+    thread::spawn(move || {
+        if let Err(error) = spawn_global_input_events(listener_app.clone(), event_seen_for_listener) {
+            INPUT_LISTENER_RUNNING.store(false, Ordering::SeqCst);
+            let message = format!("Failed to start global input monitoring: {error}");
+            eprintln!("{message}");
+            emit_log(&listener_app, &message);
+            emit_input_monitoring_status(
+                &listener_app,
+                InputMonitoringStatus {
+                    state: "failed",
+                    message,
+                    guidance: Some(
+                        "Allow this app in macOS System Settings > Privacy & Security > Accessibility and Input Monitoring, then retry."
+                            .to_string(),
+                    ),
+                    can_retry: true,
+                },
+            );
+        }
+    });
 }
 
 #[cfg(target_os = "macos")]
@@ -1232,6 +1437,8 @@ pub fn run() {
         .manage(Mutex::new(AppState::default()))
         .invoke_handler(tauri::generate_handler![
             get_overlay_visible,
+            get_input_monitoring_status,
+            retry_input_monitoring,
             get_settings,
             set_settings,
             get_chapter_text,
@@ -1298,24 +1505,7 @@ pub fn run() {
                     });
                 }
 
-                let listener_app = app.handle().clone();
-                let event_seen = Arc::new(AtomicBool::new(false));
-                let event_seen_for_listener = Arc::clone(&event_seen);
-
-                if std::env::var("OVERLAY_DISABLE_MOUSE_LISTENER").ok().as_deref() != Some("1") {
-                    let _watchdog_app = app.handle().clone();
-                    thread::spawn(move || {
-                        if let Err(error) = spawn_global_input_events(listener_app, event_seen_for_listener) {
-                            let message = format!(
-                                "Failed to start global input monitoring: {error}. Please allow Accessibility for this app in System Settings > Privacy & Security > Accessibility."
-                            );
-                            eprintln!("{message}");
-                            emit_log(&_watchdog_app, &message);
-                        }
-                    });
-                } else {
-                    eprintln!("Global mouse listener disabled by OVERLAY_DISABLE_MOUSE_LISTENER=1");
-                }
+                start_global_input_monitoring(app.handle().clone());
             })) {
                 eprintln!("Panic in app setup: {:?}", error);
             }
