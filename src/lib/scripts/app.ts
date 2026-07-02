@@ -128,6 +128,25 @@ export const KEY_NAME_TO_DISPLAY_TEXT_MAP: Record<string, string> = {
   Function: KEY_CONSTANTS.function,
 };
 
+export const KEYBOARD_LAYOUT_KEY_NAME_TO_DISPLAY_TEXT_MAP: Record<KeyboardLayout, Record<string, string>> = {
+  unknown: {},
+  us: {
+    Backslash: KEY_CONSTANTS.backslash,
+    BackQuote: KEY_CONSTANTS.backQuote,
+  },
+  jis: {
+    JisYen: KEY_CONSTANTS.jisYen,
+    JisUnderscore: KEY_CONSTANTS.jisUnderscore,
+    Eisu: KEY_CONSTANTS.eisu,
+    Kana: KEY_CONSTANTS.kana,
+  },
+};
+
+export const toDisplayKeyName = (key = "", keyboardLayout: KeyboardLayout = "unknown"): string => {
+  const layoutMap = KEYBOARD_LAYOUT_KEY_NAME_TO_DISPLAY_TEXT_MAP[keyboardLayout] || {};
+  return layoutMap[key] || KEY_NAME_TO_DISPLAY_TEXT_MAP[key] || key;
+};
+
 export const KEY_PRIORITIES: Record<string, number> = {
   [KEY_CONSTANTS.control]: 0,
   [KEY_CONSTANTS.option]: 1,

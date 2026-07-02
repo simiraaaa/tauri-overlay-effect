@@ -4,7 +4,7 @@
 	import Mouse from "$components/Mouse.svelte";
 	import { dev } from '$app/environment';
 	import { getAppBridge } from "$lib/scripts/app-bridge";
-	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_NAME_TO_DISPLAY_TEXT_MAP, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings } from "$lib/scripts/app";
+	import { FUNCTION_KEYS, KEY_CONSTANTS, KEY_PRIORITIES, MODIFIER_KEYS, chapterIndex, chapterText, settings, toDisplayKeyName } from "$lib/scripts/app";
 	import { onDestroy, onMount } from "svelte";
 
 	type KeyParam = {
@@ -16,6 +16,7 @@
 	let keyParams = $state<KeyParam[]>([]);
 	let pressedKeySet = $state(new Set<string>());
 	let unlisteners = $state<(() => void)[]>([]);
+	let keyboardLayout = $state<KeyboardLayout>('unknown');
 
 	const log = (...args: unknown[]) => {
 		logs.push(...args);
@@ -46,9 +47,11 @@
 			return;
 		}
 
-		const display_key = toDisplayKeyName(e.rawKey?.name);
+		keyboardLayout = e.keyboardLayout || keyboardLayout;
+
+		const display_key = toDisplayKeyName(e.rawKey?.name, keyboardLayout);
 		if (e.state === 'DOWN') {
-			syncPressedKeys(down);
+			syncPressedKeys(down, keyboardLayout);
 			pressedKeySet.add(display_key);
 			let key_display_threshold = 2;
 			if (pressedKeySet.has(KEY_CONSTANTS.shift)) {
@@ -60,7 +63,7 @@
 				}
 			}
 			if (pressedKeySet.size >= key_display_threshold) {
-				const display_keys = [...pressedKeySet].map(toDisplayKeyName).sort((a, b) => {
+				const display_keys = [...pressedKeySet].map((key) => toDisplayKeyName(key, keyboardLayout)).sort((a, b) => {
 					let ap = Infinity;
 					let bp = Infinity;
 					if (a in KEY_PRIORITIES) {
@@ -76,19 +79,19 @@
 				}
 			}
 		} else if (e.state === 'UP') {
-			if (!syncPressedKeys(down)) {
+			if (!syncPressedKeys(down, keyboardLayout)) {
 				pressedKeySet.delete(display_key);
 			}
 		}
 	};
 
-	const syncPressedKeys = (down: GlobalKeyDownMap) => {
+	const syncPressedKeys = (down: GlobalKeyDownMap, layout: KeyboardLayout) => {
 		if (!down || typeof down !== 'object') return false;
 
 		pressedKeySet = new Set(
 			Object.entries(down)
 				.filter(([, pressed]) => pressed)
-				.map(([key]) => toDisplayKeyName(key)),
+				.map(([key]) => toDisplayKeyName(key, layout)),
 		);
 		return true;
 	};
@@ -119,14 +122,6 @@
 		});
 
 		return has_function_key || (has_modifier_key && has_other_key);
-	};
-
-	const toDisplayKeyName = (key = ''): string => {
-		const text = KEY_NAME_TO_DISPLAY_TEXT_MAP[key];
-		if (text) {
-			return text;
-		}
-		return key;
 	};
 
 	const onRemoveKeyboard = (param: KeyParam) => {

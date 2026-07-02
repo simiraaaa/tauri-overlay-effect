@@ -61,8 +61,25 @@ struct RawKey {
 struct KeyEvent {
     name: String,
     state: &'static str,
+    #[serde(rename = "keyboardLayout")]
+    keyboard_layout: KeyboardLayout,
     #[serde(rename = "rawKey")]
     raw_key: RawKey,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum KeyboardLayout {
+    Unknown,
+    Jis,
+    Us,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct ActiveKey {
+    name: String,
+    sequence: u64,
 }
 
 #[tauri::command]
@@ -174,6 +191,9 @@ fn emit_log(app: &tauri::AppHandle, message: &str) {
 }
 
 #[cfg(target_os = "macos")]
+const NON_MODIFIER_KEY_STALE_TIMEOUT_MS: u64 = 2500;
+
+#[cfg(target_os = "macos")]
 fn normalize_global_mouse_position(
     app: &tauri::AppHandle,
     raw_x: i32,
@@ -251,7 +271,9 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
     let cursor_position = Arc::new(Mutex::new((0i32, 0i32)));
     let normalized_position = Arc::new(Mutex::new((0i32, 0i32)));
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
-    let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
+    let active_key_names = Arc::new(Mutex::new(HashMap::<Key, ActiveKey>::new()));
+    let active_key_sequence = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let detected_keyboard_layout = Arc::new(Mutex::new(KeyboardLayout::Unknown));
     let app_for_events = app.clone();
 
     let is_button_down_for_events = Arc::clone(&is_button_down);
@@ -259,6 +281,8 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
     let normalized_position_for_events = Arc::clone(&normalized_position);
     let pressed_keys_for_events = Arc::clone(&pressed_keys);
     let active_key_names_for_events = Arc::clone(&active_key_names);
+    let active_key_sequence_for_events = Arc::clone(&active_key_sequence);
+    let detected_keyboard_layout_for_events = Arc::clone(&detected_keyboard_layout);
     let app_for_normalize_events = app_for_events.clone();
 
     let listener = move |event: Event| {
@@ -333,9 +357,18 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyPress(key) => {
+                    let keyboard_layout = update_keyboard_layout(
+                        &detected_keyboard_layout_for_events,
+                        key,
+                        event.name.as_ref(),
+                    );
                     let (name, name_raw) = key_name_for_event(event.name.as_ref(), key);
+                    let sequence = active_key_sequence_for_events.fetch_add(1, Ordering::Relaxed) + 1;
                     let _ = active_key_names_for_events.lock().map(|mut active| {
-                        active.insert(key, name.clone());
+                        active.insert(key, ActiveKey {
+                            name: name.clone(),
+                            sequence,
+                        });
                     });
                     let _ = pressed_keys_for_events.lock().map(|mut down| {
                         down.insert(name.clone(), true);
@@ -348,19 +381,35 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                         KeyEvent {
                             name: name.clone(),
                             state: "DOWN",
+                            keyboard_layout,
                             raw_key: RawKey {
                                 name: Some(name.clone()),
                                 name_raw: Some(raw_name),
                             },
                         },
                     );
+
+                    schedule_stale_key_cleanup(
+                        app_for_events.clone(),
+                        Arc::clone(&active_key_names_for_events),
+                        Arc::clone(&pressed_keys_for_events),
+                        key,
+                        name,
+                        sequence,
+                        keyboard_layout,
+                    );
                 }
                 EventType::KeyRelease(key) => {
+                    let keyboard_layout = update_keyboard_layout(
+                        &detected_keyboard_layout_for_events,
+                        key,
+                        event.name.as_ref(),
+                    );
                     let (fallback_name, name_raw) = key_name_for_event(event.name.as_ref(), key);
                     let name = active_key_names_for_events
                         .lock()
                         .ok()
-                        .and_then(|mut active| active.remove(&key))
+                        .and_then(|mut active| active.remove(&key).map(|active| active.name))
                         .unwrap_or(fallback_name);
                     let _ = pressed_keys_for_events.lock().map(|mut down| {
                         down.remove(&name);
@@ -372,6 +421,7 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                         KeyEvent {
                             name: name.clone(),
                             state: "UP",
+                            keyboard_layout,
                             raw_key: RawKey {
                                 name: Some(name.clone()),
                                 name_raw: Some(name_raw.unwrap_or(name.clone())),
@@ -409,6 +459,127 @@ fn emit_key_if_state_changed(
     };
 
     emit_global_key_event(app, event, &down);
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_stale_key_cleanup(
+    app: tauri::AppHandle,
+    active_key_names: Arc<Mutex<HashMap<Key, ActiveKey>>>,
+    pressed_keys: Arc<Mutex<HashMap<String, bool>>>,
+    key: Key,
+    name: String,
+    sequence: u64,
+    keyboard_layout: KeyboardLayout,
+) {
+    if is_modifier_key(key) {
+        return;
+    }
+
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(NON_MODIFIER_KEY_STALE_TIMEOUT_MS));
+
+        let should_clear = active_key_names
+            .lock()
+            .ok()
+            .and_then(|mut active| {
+                if active
+                    .get(&key)
+                    .is_some_and(|active_key| active_key.sequence == sequence && active_key.name == name)
+                {
+                    active.remove(&key);
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(false);
+
+        if !should_clear {
+            return;
+        }
+
+        let down = pressed_keys
+            .lock()
+            .map(|mut state| {
+                state.remove(&name);
+                state.clone()
+            })
+            .unwrap_or_default();
+
+        emit_global_key_event(
+            &app,
+            KeyEvent {
+                name: name.clone(),
+                state: "UP",
+                keyboard_layout,
+                raw_key: RawKey {
+                    name: Some(name.clone()),
+                    name_raw: Some("stale-cleanup".to_string()),
+                },
+            },
+            &down,
+        );
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn is_modifier_key(key: Key) -> bool {
+    matches!(
+        key,
+        Key::Alt
+            | Key::AltGr
+            | Key::ControlLeft
+            | Key::ControlRight
+            | Key::MetaLeft
+            | Key::MetaRight
+            | Key::ShiftLeft
+            | Key::ShiftRight
+            | Key::Function
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn update_keyboard_layout(
+    detected_keyboard_layout: &Arc<Mutex<KeyboardLayout>>,
+    key: Key,
+    event_name: Option<&String>,
+) -> KeyboardLayout {
+    let inferred = infer_keyboard_layout(key, event_name);
+
+    let Ok(mut current) = detected_keyboard_layout.lock() else {
+        return inferred.unwrap_or(KeyboardLayout::Unknown);
+    };
+
+    match (*current, inferred) {
+        (KeyboardLayout::Jis, _) => KeyboardLayout::Jis,
+        (_, Some(KeyboardLayout::Jis)) => {
+            *current = KeyboardLayout::Jis;
+            KeyboardLayout::Jis
+        }
+        (KeyboardLayout::Unknown, Some(layout)) => {
+            *current = layout;
+            layout
+        }
+        _ => *current,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn infer_keyboard_layout(key: Key, event_name: Option<&String>) -> Option<KeyboardLayout> {
+    if matches!(key, Key::Unknown(93) | Key::Unknown(94) | Key::Unknown(102) | Key::Unknown(104)) {
+        return Some(KeyboardLayout::Jis);
+    }
+
+    if let Some(name) = event_name {
+        if name == "¥" || name == "￥" {
+            return Some(KeyboardLayout::Jis);
+        }
+        if matches!(key, Key::BackSlash) && name == "\\" {
+            return Some(KeyboardLayout::Us);
+        }
+    }
+
+    None
 }
 
 #[cfg(target_os = "macos")]
