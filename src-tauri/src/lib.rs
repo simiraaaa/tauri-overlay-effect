@@ -100,6 +100,22 @@ struct MouseEvent {
     y: i32,
 }
 
+#[derive(Clone, Copy)]
+struct OverlayBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy)]
+struct MonitorBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
 #[derive(Clone, Serialize)]
 struct RawKey {
     #[serde(rename = "name")]
@@ -633,73 +649,147 @@ fn emit_log(app: &tauri::AppHandle, message: &str) {
     let _ = app.emit("log", message.to_string());
 }
 
+fn overlay_desktop_bounds(window: &tauri::WebviewWindow) -> Option<OverlayBounds> {
+    let monitors = window.available_monitors().ok()?;
+    let mut monitors = monitors.iter();
+    let first = monitors.next()?;
+    let first_position = first.position();
+    let first_size = first.size();
+
+    let mut left = first_position.x as i64;
+    let mut top = first_position.y as i64;
+    let mut right = left + first_size.width as i64;
+    let mut bottom = top + first_size.height as i64;
+
+    for monitor in monitors {
+        let position = monitor.position();
+        let size = monitor.size();
+        let monitor_left = position.x as i64;
+        let monitor_top = position.y as i64;
+        let monitor_right = monitor_left + size.width as i64;
+        let monitor_bottom = monitor_top + size.height as i64;
+
+        left = left.min(monitor_left);
+        top = top.min(monitor_top);
+        right = right.max(monitor_right);
+        bottom = bottom.max(monitor_bottom);
+    }
+
+    Some(OverlayBounds {
+        x: left as i32,
+        y: top as i32,
+        width: (right - left).max(1) as u32,
+        height: (bottom - top).max(1) as u32,
+    })
+}
+
+fn fallback_monitor_bounds(window: &tauri::WebviewWindow) -> Option<MonitorBounds> {
+    let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten())?;
+    let position = monitor.position();
+    let size = monitor.size();
+
+    Some(MonitorBounds {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    })
+}
+
 #[cfg(target_os = "macos")]
 fn normalize_global_mouse_position(
     app: &tauri::AppHandle,
     raw_x: i32,
     raw_y: i32,
-    last_position: &Arc<Mutex<(i32, i32)>>,
+    last_position: &Arc<Mutex<Option<(i32, i32)>>>,
 ) -> (i32, i32) {
     let Some(window) = app.get_webview_window("main") else {
         return (raw_x, raw_y);
     };
 
+    let desktop = overlay_desktop_bounds(&window).unwrap_or_else(|| {
+        let monitor = fallback_monitor_bounds(&window).unwrap_or(MonitorBounds {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        });
+
+        OverlayBounds {
+            x: monitor.x,
+            y: monitor.y,
+            width: monitor.width,
+            height: monitor.height,
+        }
+    });
+
     let monitor = window
         .monitor_from_point(raw_x as f64, raw_y as f64)
         .ok()
         .flatten()
-        .or_else(|| window.current_monitor().ok().flatten());
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
 
-    let Some(monitor) = monitor else {
-        return (raw_x, raw_y);
-    };
+            MonitorBounds {
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
+            }
+        })
+        .or_else(|| fallback_monitor_bounds(&window))
+        .unwrap_or(MonitorBounds {
+            x: desktop.x,
+            y: desktop.y,
+            width: desktop.width,
+            height: desktop.height,
+        });
 
-    let monitor_position = monitor.position();
-    let monitor_size = monitor.size();
-    let monitor_left = monitor_position.x as f64;
-    let monitor_top = monitor_position.y as f64;
-    let monitor_width = monitor_size.width as f64;
-    let monitor_height = monitor_size.height as f64;
+    let monitor_left = monitor.x as f64;
+    let monitor_top = monitor.y as f64;
+    let monitor_height = monitor.height as f64;
+    let monitor_offset_x = (monitor.x - desktop.x) as f64;
+    let monitor_offset_y = (monitor.y - desktop.y) as f64;
 
-    let scaled_x = raw_x as f64 - monitor_left;
-    let scaled_y_from_top = raw_y as f64 - monitor_top;
-    let scaled_y_from_bottom = (monitor_top + monitor_height) - raw_y as f64;
+    let scaled_x = monitor_offset_x + raw_x as f64 - monitor_left;
+    let top_local_y = raw_y as f64 - monitor_top;
+    let bottom_global_y = monitor_height - top_local_y;
+    let scaled_y_from_top = monitor_offset_y + top_local_y;
+    let scaled_y_from_bottom_global = monitor_offset_y + bottom_global_y;
 
-    let top_candidate = (scaled_x.round() as i32, scaled_y_from_top.round() as i32);
-    let bottom_candidate = (scaled_x.round() as i32, scaled_y_from_bottom.round() as i32);
+    let max_x = desktop.width as i32;
+    let max_y = desktop.height as i32;
 
-    let mut x = bottom_candidate.0;
-    let mut y = bottom_candidate.1;
+    let candidates = [
+        (scaled_x.round() as i32, scaled_y_from_top.round() as i32),
+        (scaled_x.round() as i32, scaled_y_from_bottom_global.round() as i32),
+    ];
 
-    if let Ok((last_x, last_y)) = last_position.lock().map(|position| *position) {
-        let top_delta = (top_candidate.0 - last_x).abs() + (top_candidate.1 - last_y).abs();
-        let bottom_delta = (bottom_candidate.0 - last_x).abs() + (bottom_candidate.1 - last_y).abs();
+    let previous = last_position.lock().ok().and_then(|position| *position);
+    let (x, y) = previous
+        .and_then(|(last_x, last_y)| {
+            let nearest_valid = candidates
+                .iter()
+                .filter(|(_, y)| *y >= 0 && *y <= max_y)
+                .min_by_key(|(x, y)| (x - last_x).abs() + (y - last_y).abs())
+                .copied();
 
-        if top_delta < bottom_delta {
-            x = top_candidate.0;
-            y = top_candidate.1;
-        }
-    }
+            nearest_valid.or_else(|| {
+                candidates
+                    .iter()
+                    .min_by_key(|(x, y)| (x - last_x).abs() + (y - last_y).abs())
+                    .copied()
+            })
+        })
+        .unwrap_or(candidates[0]);
 
-    let max_x = monitor_width.round() as i32;
-    let max_y = monitor_height.round() as i32;
-
-    if x < 0 {
-        x = 0;
-    }
-    if x > max_x {
-        x = max_x;
-    }
-    if y < 0 {
-        y = 0;
-    }
-    if y > max_y {
-        y = max_y;
-    }
+    let x = x.clamp(0, max_x);
+    let y = y.clamp(0, max_y);
 
     let normalized = (x, y);
     if let Ok(mut last) = last_position.lock() {
-        *last = normalized;
+        *last = Some(normalized);
     }
 
     normalized
@@ -709,7 +799,7 @@ fn normalize_global_mouse_position(
 fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>) -> Result<(), String> {
     let is_button_down = Arc::new(AtomicBool::new(false));
     let cursor_position = Arc::new(Mutex::new((0i32, 0i32)));
-    let normalized_position = Arc::new(Mutex::new((0i32, 0i32)));
+    let normalized_position = Arc::new(Mutex::new(None::<(i32, i32)>));
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
     let detected_keyboard_layout = Arc::new(Mutex::new(KeyboardLayout::Unknown));
@@ -1060,25 +1150,10 @@ fn is_printable_key_name(name: &str) -> bool {
         })
 }
 
-#[cfg(not(target_os = "macos"))]
 fn apply_overlay_window_bounds(window: &tauri::WebviewWindow) {
-    let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
-
-    if let Some(monitor) = monitor {
-        let position = *monitor.position();
-        let size = *monitor.size();
-        let _ = window.set_position(PhysicalPosition::new(position.x, position.y));
-        let _ = window.set_size(PhysicalSize::new(size.width, size.height));
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn apply_overlay_window_bounds(window: &tauri::WebviewWindow) {
-    if let Some(monitor) = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten()) {
-        let position = *monitor.position();
-        let size = *monitor.size();
-        let _ = window.set_position(PhysicalPosition::new(position.x, position.y));
-        let _ = window.set_size(PhysicalSize::new(size.width, size.height));
+    if let Some(bounds) = overlay_desktop_bounds(window) {
+        let _ = window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
+        let _ = window.set_size(PhysicalSize::new(bounds.width, bounds.height));
     }
 }
 
@@ -1095,14 +1170,11 @@ fn apply_macos_overlay_window_level(window: &tauri::WebviewWindow) {
     let ns_window: &NSWindow = unsafe { &*ns_window };
     set_overlay_ns_window_level(ns_window);
 
-    // メニューバー領域まで含めて画面全体を覆う。
+    // メニューバー領域まで含めて全ディスプレイの仮想デスクトップ矩形を覆う。
     // AppKit はメニューバーより低いレベルのウィンドウを constrainFrameRect で
     // メニューバー高さ分だけ下へ押し下げる。レベルを上げた「後」に画面全体の
     // フレームを再設定することで、この押し下げを回避しウィンドウ原点を画面最上部に揃える。
-    // NSScreen の frame はポイント単位なので Retina スケールにも追従する。
-    if let Some(screen) = ns_window.screen() {
-        ns_window.setFrame_display(screen.frame(), true);
-    }
+    apply_overlay_window_bounds(window);
     ns_window.orderFrontRegardless();
     set_overlay_ns_window_level(ns_window);
 }
