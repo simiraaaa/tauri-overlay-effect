@@ -24,7 +24,6 @@ use tauri::{
 const MENU_TOGGLE_OVERLAY: &str = "toggle-overlay";
 const MENU_TOGGLE_MOUSE: &str = "toggle-mouse";
 const MENU_TOGGLE_KEYBOARD: &str = "toggle-keyboard";
-const MENU_OPEN_CHAPTER_SETTINGS: &str = "open-chapter-settings";
 const MENU_TOGGLE_CHAPTER: &str = "toggle-chapter";
 const MENU_PREVIOUS_CHAPTER: &str = "previous-chapter";
 const MENU_NEXT_CHAPTER: &str = "next-chapter";
@@ -515,29 +514,6 @@ fn toggle_overlay_visibility(app: &tauri::AppHandle) -> Option<bool> {
     Some(visible)
 }
 
-fn open_chapter_settings_window(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("chapter-setting") {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-
-    tauri::WebviewWindowBuilder::new(
-        app,
-        "chapter-setting",
-        tauri::WebviewUrl::App("/chapter-setting".into()),
-    )
-    .title("Chapter Settings")
-    .inner_size(460.0, 520.0)
-    .resizable(true)
-    .decorations(true)
-    .transparent(false)
-    .always_on_top(false)
-    .build()
-    .map(|_| ())
-    .map_err(|error| error.to_string())
-}
-
 fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
     match id {
         MENU_TOGGLE_OVERLAY => {
@@ -545,11 +521,6 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
         }
         MENU_TOGGLE_MOUSE => toggle_mouse_enabled(app),
         MENU_TOGGLE_KEYBOARD => toggle_keyboard_enabled(app),
-        MENU_OPEN_CHAPTER_SETTINGS => {
-            if let Err(error) = open_chapter_settings_window(app) {
-                emit_menu_error(app, &format!("Failed to open chapter settings window: {error}"));
-            }
-        }
         MENU_TOGGLE_CHAPTER => toggle_chapter_enabled(app),
         MENU_PREVIOUS_CHAPTER => move_chapter_index(app, -1),
         MENU_NEXT_CHAPTER => move_chapter_index(app, 1),
@@ -581,10 +552,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .checked(initial_settings.enable_keyboard)
         .build(app)
         .map_err(|error| error.to_string())?;
-    let open_chapter_settings =
-        MenuItemBuilder::with_id(MENU_OPEN_CHAPTER_SETTINGS, "チャプター設定画面を開く")
-            .build(app)
-            .map_err(|error| error.to_string())?;
     let chapter_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_CHAPTER, "チャプターを表示")
         .checked(initial_settings.enable_chapter)
         .build(app)
@@ -616,7 +583,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
             &toggle_overlay,
             &mouse_enabled,
             &keyboard_enabled,
-            &open_chapter_settings,
             &chapter_enabled,
             &previous_chapter,
             &next_chapter,
