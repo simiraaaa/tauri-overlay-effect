@@ -16,6 +16,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "tauri:build:macos": "tauri build",
+    "tauri:build:macos:app": "tauri build --bundles app",
+    "tauri:build:macos:dmg": "tauri build --bundles dmg",
     "tauri:build:dmg": "tauri build --bundles dmg"
   },
   "dependencies": {

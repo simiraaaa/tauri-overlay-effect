@@ -20,3 +20,13 @@ tasks/
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/gen/
+
+# macOS signing / notarization secrets
+*.p12
+*.cer
+*.certSigningRequest
+*.keychain
+*.keychain-db
+AuthKey_*.p8
+src-tauri/*.provisionprofile
+src-tauri/*.mobileprovision
