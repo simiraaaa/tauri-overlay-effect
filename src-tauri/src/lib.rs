@@ -755,10 +755,8 @@ fn normalize_global_mouse_position(
     let scaled_x = monitor_offset_x + raw_x as f64 - monitor_left;
     let top_local_y = raw_y as f64 - monitor_top;
     let bottom_global_y = monitor_height - top_local_y;
-    let bottom_local_y = monitor_height - raw_y as f64;
     let scaled_y_from_top = monitor_offset_y + top_local_y;
     let scaled_y_from_bottom_global = monitor_offset_y + bottom_global_y;
-    let scaled_y_from_bottom_local = monitor_offset_y + bottom_local_y;
 
     let max_x = desktop.width as i32;
     let max_y = desktop.height as i32;
@@ -766,17 +764,23 @@ fn normalize_global_mouse_position(
     let candidates = [
         (scaled_x.round() as i32, scaled_y_from_top.round() as i32),
         (scaled_x.round() as i32, scaled_y_from_bottom_global.round() as i32),
-        (scaled_x.round() as i32, scaled_y_from_bottom_local.round() as i32),
     ];
 
     let previous = last_position.lock().ok().and_then(|position| *position);
     let (x, y) = previous
         .and_then(|(last_x, last_y)| {
-            candidates
+            let nearest_valid = candidates
                 .iter()
                 .filter(|(_, y)| *y >= 0 && *y <= max_y)
                 .min_by_key(|(x, y)| (x - last_x).abs() + (y - last_y).abs())
-                .copied()
+                .copied();
+
+            nearest_valid.or_else(|| {
+                candidates
+                    .iter()
+                    .min_by_key(|(x, y)| (x - last_x).abs() + (y - last_y).abs())
+                    .copied()
+            })
         })
         .unwrap_or(candidates[0]);
 
