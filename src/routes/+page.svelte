@@ -39,7 +39,7 @@
 		unlisteners = [];
 	});
 
-	const keydownHandler = (_e: unknown, e: GlobalKeyEvent, _down: GlobalKeyDownMap) => {
+	const keydownHandler = (_e: unknown, e: GlobalKeyEvent, down: GlobalKeyDownMap) => {
 		if (!$settings.enableKeyboard) return;
 
 		if (e.name?.startsWith('MOUSE')) {
@@ -48,6 +48,7 @@
 
 		const display_key = toDisplayKeyName(e.rawKey?.name);
 		if (e.state === 'DOWN') {
+			syncPressedKeys(down);
 			pressedKeySet.add(display_key);
 			let key_display_threshold = 2;
 			if (pressedKeySet.has(KEY_CONSTANTS.shift)) {
@@ -75,8 +76,21 @@
 				}
 			}
 		} else if (e.state === 'UP') {
-			pressedKeySet.delete(display_key);
+			if (!syncPressedKeys(down)) {
+				pressedKeySet.delete(display_key);
+			}
 		}
+	};
+
+	const syncPressedKeys = (down: GlobalKeyDownMap) => {
+		if (!down || typeof down !== 'object') return false;
+
+		pressedKeySet = new Set(
+			Object.entries(down)
+				.filter(([, pressed]) => pressed)
+				.map(([key]) => toDisplayKeyName(key)),
+		);
+		return true;
 	};
 
 	const pushKeys = (keys: string[] = []) => {

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -7,7 +8,7 @@ use std::thread;
 use std::panic::{self, AssertUnwindSafe};
 
 #[cfg(target_os = "macos")]
-use rdev::{listen, Button, Event, EventType};
+use rdev::{listen, Button, Event, EventType, Key};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
     NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
@@ -46,6 +47,22 @@ struct MouseEvent {
     event_type: &'static str,
     x: i32,
     y: i32,
+}
+
+#[derive(Clone, Serialize)]
+struct RawKey {
+    #[serde(rename = "name")]
+    name: Option<String>,
+    #[serde(rename = "_nameRaw")]
+    name_raw: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct KeyEvent {
+    name: String,
+    state: &'static str,
+    #[serde(rename = "rawKey")]
+    raw_key: RawKey,
 }
 
 #[tauri::command]
@@ -139,6 +156,19 @@ fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
     }
 }
 
+fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap<String, bool>) {
+    let payload = (event, down);
+    if let Some(window) = app.get_webview_window("main") {
+        if window.emit("global-key", &payload).is_ok() {
+            return;
+        }
+    }
+
+    if let Err(error) = app.emit("global-key", payload) {
+        eprintln!("Failed to emit global keyboard event: {error:?}");
+    }
+}
+
 fn emit_log(app: &tauri::AppHandle, message: &str) {
     let _ = app.emit("log", message.to_string());
 }
@@ -216,15 +246,19 @@ fn normalize_global_mouse_position(
 }
 
 #[cfg(target_os = "macos")]
-fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>) -> Result<(), String> {
+fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>) -> Result<(), String> {
     let is_button_down = Arc::new(AtomicBool::new(false));
     let cursor_position = Arc::new(Mutex::new((0i32, 0i32)));
     let normalized_position = Arc::new(Mutex::new((0i32, 0i32)));
+    let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
+    let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
     let app_for_events = app.clone();
 
     let is_button_down_for_events = Arc::clone(&is_button_down);
     let cursor_position_for_events = Arc::clone(&cursor_position);
     let normalized_position_for_events = Arc::clone(&normalized_position);
+    let pressed_keys_for_events = Arc::clone(&pressed_keys);
+    let active_key_names_for_events = Arc::clone(&active_key_names);
     let app_for_normalize_events = app_for_events.clone();
 
     let listener = move |event: Event| {
@@ -298,6 +332,53 @@ fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                         },
                     );
                 }
+                EventType::KeyPress(key) => {
+                    let (name, name_raw) = key_name_for_event(event.name.as_ref(), key);
+                    let _ = active_key_names_for_events.lock().map(|mut active| {
+                        active.insert(key, name.clone());
+                    });
+                    let _ = pressed_keys_for_events.lock().map(|mut down| {
+                        down.insert(name.clone(), true);
+                    });
+                    let raw_name = name_raw.unwrap_or_else(|| name.clone());
+
+                    emit_key_if_state_changed(
+                        &app_for_events,
+                        &pressed_keys_for_events,
+                        KeyEvent {
+                            name: name.clone(),
+                            state: "DOWN",
+                            raw_key: RawKey {
+                                name: Some(name.clone()),
+                                name_raw: Some(raw_name),
+                            },
+                        },
+                    );
+                }
+                EventType::KeyRelease(key) => {
+                    let (fallback_name, name_raw) = key_name_for_event(event.name.as_ref(), key);
+                    let name = active_key_names_for_events
+                        .lock()
+                        .ok()
+                        .and_then(|mut active| active.remove(&key))
+                        .unwrap_or(fallback_name);
+                    let _ = pressed_keys_for_events.lock().map(|mut down| {
+                        down.remove(&name);
+                    });
+
+                    emit_key_if_state_changed(
+                        &app_for_events,
+                        &pressed_keys_for_events,
+                        KeyEvent {
+                            name: name.clone(),
+                            state: "UP",
+                            raw_key: RawKey {
+                                name: Some(name.clone()),
+                                name_raw: Some(name_raw.unwrap_or(name.clone())),
+                            },
+                        },
+                    );
+                }
                 _ => {}
             }
         })) {
@@ -312,8 +393,153 @@ fn spawn_global_mouse_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn spawn_global_mouse_events(_app: tauri::AppHandle, _event_seen: Arc<AtomicBool>) -> Result<(), String> {
+fn spawn_global_input_events(_app: tauri::AppHandle, _event_seen: Arc<AtomicBool>) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn emit_key_if_state_changed(
+    app: &tauri::AppHandle,
+    pressed_keys: &Arc<Mutex<HashMap<String, bool>>>,
+    event: KeyEvent,
+) {
+    let down = match pressed_keys.lock() {
+        Ok(state) => state.clone(),
+        Err(_) => HashMap::new(),
+    };
+
+    emit_global_key_event(app, event, &down);
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_key_raw_name(name: &str) -> String {
+    match name {
+        "Alt" => "Option".to_string(),
+        "Meta" => "Command".to_string(),
+        "Super" => "Command".to_string(),
+        _ => {
+            if name.len() == 1 {
+                name.to_ascii_uppercase()
+            } else {
+                name.to_string()
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn key_name_for_event(event_name: Option<&String>, key: Key) -> (String, Option<String>) {
+    if let Some(name) = stable_key_name_from_physical_key(key) {
+        return (name.clone(), Some(format!("{key:?}")));
+    }
+
+    let raw = event_name
+        .filter(|name| is_printable_key_name(name))
+        .cloned();
+    if let Some(name) = &raw {
+        let normalized = normalize_key_raw_name(name);
+        return (normalized, Some(name.clone()));
+    }
+
+    let fallback = format!("{key:?}");
+    (fallback, raw)
+}
+
+#[cfg(target_os = "macos")]
+fn stable_key_name_from_physical_key(key: Key) -> Option<String> {
+    let name = match key {
+        Key::ShiftLeft => "Shift".to_string(),
+        Key::ShiftRight => "RightShift".to_string(),
+        Key::ControlLeft => "Control".to_string(),
+        Key::ControlRight => "RightControl".to_string(),
+        Key::Alt => "Option".to_string(),
+        Key::AltGr => "RightOption".to_string(),
+        Key::MetaLeft => "Command".to_string(),
+        Key::MetaRight => "RightCommand".to_string(),
+        Key::Backspace => "Delete".to_string(),
+        Key::Return => "Return".to_string(),
+        Key::CapsLock => "CapsLock".to_string(),
+        Key::Delete => "Delete".to_string(),
+        Key::Tab => "Tab".to_string(),
+        Key::Escape => "Escape".to_string(),
+        Key::Home => "Home".to_string(),
+        Key::End => "End".to_string(),
+        Key::PageUp => "PageUp".to_string(),
+        Key::PageDown => "PageDown".to_string(),
+        Key::UpArrow => "UpArrow".to_string(),
+        Key::DownArrow => "DownArrow".to_string(),
+        Key::LeftArrow => "LeftArrow".to_string(),
+        Key::RightArrow => "RightArrow".to_string(),
+        Key::Function => "Function".to_string(),
+        Key::F1 => "F1".to_string(),
+        Key::F2 => "F2".to_string(),
+        Key::F3 => "F3".to_string(),
+        Key::F4 => "F4".to_string(),
+        Key::F5 => "F5".to_string(),
+        Key::F6 => "F6".to_string(),
+        Key::F7 => "F7".to_string(),
+        Key::F8 => "F8".to_string(),
+        Key::F9 => "F9".to_string(),
+        Key::F10 => "F10".to_string(),
+        Key::F11 => "F11".to_string(),
+        Key::F12 => "F12".to_string(),
+        Key::Space => "Space".to_string(),
+        Key::KpReturn => "Return".to_string(),
+        Key::Num1 => "1".to_string(),
+        Key::Num2 => "2".to_string(),
+        Key::Num3 => "3".to_string(),
+        Key::Num4 => "4".to_string(),
+        Key::Num5 => "5".to_string(),
+        Key::Num6 => "6".to_string(),
+        Key::Num7 => "7".to_string(),
+        Key::Num8 => "8".to_string(),
+        Key::Num9 => "9".to_string(),
+        Key::Num0 => "0".to_string(),
+        Key::NumLock => "NumLock".to_string(),
+        Key::KpMinus => "Minus".to_string(),
+        Key::KpPlus => "Plus".to_string(),
+        Key::KpMultiply => "Multiply".to_string(),
+        Key::KpDivide => "Slash".to_string(),
+        Key::Kp0 => "0".to_string(),
+        Key::Kp1 => "1".to_string(),
+        Key::Kp2 => "2".to_string(),
+        Key::Kp3 => "3".to_string(),
+        Key::Kp4 => "4".to_string(),
+        Key::Kp5 => "5".to_string(),
+        Key::Kp6 => "6".to_string(),
+        Key::Kp7 => "7".to_string(),
+        Key::Kp8 => "8".to_string(),
+        Key::Kp9 => "9".to_string(),
+        Key::KpDelete => "Delete".to_string(),
+        Key::PrintScreen => "PrintScreen".to_string(),
+        Key::ScrollLock => "ScrollLock".to_string(),
+        Key::Pause => "Pause".to_string(),
+        Key::Insert => "Insert".to_string(),
+        Key::Unknown(93) => "JisYen".to_string(),
+        Key::Unknown(94) => "JisUnderscore".to_string(),
+        Key::Unknown(102) => "Eisu".to_string(),
+        Key::Unknown(104) => "Kana".to_string(),
+        Key::Unknown(_) => return None,
+        _ => {
+            let raw = format!("{key:?}");
+            if let Some(rest) = raw.strip_prefix("Key") {
+                rest.to_string()
+            } else {
+                return None;
+            }
+        }
+    };
+
+    Some(name)
+}
+
+#[cfg(target_os = "macos")]
+fn is_printable_key_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|character| {
+            !character.is_control()
+                && !matches!(character as u32, 0xE000..=0xF8FF)
+        })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -455,9 +681,9 @@ pub fn run() {
                 if std::env::var("OVERLAY_DISABLE_MOUSE_LISTENER").ok().as_deref() != Some("1") {
                     let _watchdog_app = app.handle().clone();
                     thread::spawn(move || {
-                        if let Err(error) = spawn_global_mouse_events(listener_app, event_seen_for_listener) {
+                        if let Err(error) = spawn_global_input_events(listener_app, event_seen_for_listener) {
                             let message = format!(
-                                "Failed to start global mouse monitoring: {error}. Please allow Accessibility for this app in System Settings > Privacy & Security > Accessibility."
+                                "Failed to start global input monitoring: {error}. Please allow Accessibility for this app in System Settings > Privacy & Security > Accessibility."
                             );
                             eprintln!("{message}");
                             emit_log(&_watchdog_app, &message);
