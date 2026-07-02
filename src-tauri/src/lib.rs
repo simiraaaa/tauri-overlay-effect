@@ -1,5 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -18,20 +20,45 @@ use tauri::{PhysicalPosition, PhysicalSize};
 
 #[derive(Default)]
 struct AppState {
+    storage_path: Option<PathBuf>,
+    data: PersistedState,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct Settings {
+    #[serde(default = "default_enabled", rename = "enableMouse")]
+    enable_mouse: bool,
+    #[serde(default = "default_enabled", rename = "enableKeyboard")]
+    enable_keyboard: bool,
+    #[serde(default, rename = "enableChapter")]
+    enable_chapter: bool,
+    #[serde(default, rename = "timerPaused")]
+    timer_paused: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            enable_mouse: true,
+            enable_keyboard: true,
+            enable_chapter: false,
+            timer_paused: false,
+        }
+    }
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+struct PersistedState {
+    #[serde(default)]
+    settings: Settings,
+    #[serde(default, rename = "chapterText")]
     chapter_text: String,
+    #[serde(default, rename = "chapterIndex")]
     chapter_index: usize,
 }
 
-#[derive(Serialize)]
-struct Settings {
-    #[serde(rename = "enableMouse")]
-    enable_mouse: bool,
-    #[serde(rename = "enableKeyboard")]
-    enable_keyboard: bool,
-    #[serde(rename = "enableChapter")]
-    enable_chapter: bool,
-    #[serde(rename = "timerPaused")]
-    timer_paused: bool,
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Serialize)]
@@ -76,18 +103,19 @@ enum KeyboardLayout {
 }
 
 #[tauri::command]
-fn get_settings() -> Settings {
-    Settings {
-        enable_mouse: true,
-        enable_keyboard: true,
-        enable_chapter: false,
-        timer_paused: false,
-    }
+fn get_settings(state: tauri::State<'_, Mutex<AppState>>) -> Settings {
+    state
+        .lock()
+        .map(|state| state.data.settings.clone())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 fn get_chapter_text(state: tauri::State<'_, Mutex<AppState>>) -> String {
-    state.lock().map(|state| state.chapter_text.clone()).unwrap_or_default()
+    state
+        .lock()
+        .map(|state| state.data.chapter_text.clone())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -97,21 +125,25 @@ fn set_chapter_text(
     text: String,
 ) -> Result<(), String> {
     let mut state = state.lock().map_err(|error| error.to_string())?;
-    state.chapter_text = text.clone();
+    state.data.chapter_text = text.clone();
 
-    let last = last_chapter_index(&state.chapter_text);
-    if state.chapter_index > last {
-        state.chapter_index = last;
+    let last = last_chapter_index(&state.data.chapter_text);
+    if state.data.chapter_index > last {
+        state.data.chapter_index = last;
     }
+    save_app_state(&state)?;
 
     let _ = app.emit("change-chapter-text", text);
-    let _ = app.emit("change-chapter-index", state.chapter_index);
+    let _ = app.emit("change-chapter-index", state.data.chapter_index);
     Ok(())
 }
 
 #[tauri::command]
 fn get_chapter_index(state: tauri::State<'_, Mutex<AppState>>) -> usize {
-    state.lock().map(|state| state.chapter_index).unwrap_or_default()
+    state
+        .lock()
+        .map(|state| state.data.chapter_index)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -121,7 +153,8 @@ fn set_chapter_index(
     index: usize,
 ) -> Result<ChapterIndexResult, String> {
     let mut state = state.lock().map_err(|error| error.to_string())?;
-    let result = set_chapter_index_inner(&mut state, index);
+    let result = set_chapter_index_inner(&mut state.data, index);
+    save_app_state(&state)?;
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
@@ -133,14 +166,15 @@ fn add_chapter_index(
     num: isize,
 ) -> Result<ChapterIndexResult, String> {
     let mut state = state.lock().map_err(|error| error.to_string())?;
-    let current = state.chapter_index as isize;
+    let current = state.data.chapter_index as isize;
     let next = current.saturating_add(num).max(0) as usize;
-    let result = set_chapter_index_inner(&mut state, next);
+    let result = set_chapter_index_inner(&mut state.data, next);
+    save_app_state(&state)?;
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
 
-fn set_chapter_index_inner(state: &mut AppState, index: usize) -> ChapterIndexResult {
+fn set_chapter_index_inner(state: &mut PersistedState, index: usize) -> ChapterIndexResult {
     let last = last_chapter_index(&state.chapter_text);
     state.chapter_index = index.min(last);
 
@@ -152,6 +186,58 @@ fn set_chapter_index_inner(state: &mut AppState, index: usize) -> ChapterIndexRe
 
 fn last_chapter_index(text: &str) -> usize {
     text.lines().count().saturating_sub(1)
+}
+
+fn initialize_persisted_state(app: &tauri::AppHandle) -> Result<(), String> {
+    let storage_path = persisted_state_path(app)?;
+    let data = load_persisted_state(&storage_path).unwrap_or_else(|error| {
+        eprintln!("Failed to read persisted app state: {error}");
+        PersistedState::default()
+    });
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().map_err(|error| error.to_string())?;
+    state.storage_path = Some(storage_path);
+    state.data = normalize_persisted_state(data);
+    Ok(())
+}
+
+fn persisted_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = app.path().app_config_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory.join("state.json"))
+}
+
+fn load_persisted_state(path: &PathBuf) -> Result<PersistedState, String> {
+    if !path.exists() {
+        return Ok(PersistedState::default());
+    }
+
+    let contents = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    serde_json::from_str::<PersistedState>(&contents).map_err(|error| error.to_string())
+}
+
+fn normalize_persisted_state(mut state: PersistedState) -> PersistedState {
+    let last = last_chapter_index(&state.chapter_text);
+    if state.chapter_index > last {
+        state.chapter_index = last;
+    }
+    state
+}
+
+fn save_app_state(state: &AppState) -> Result<(), String> {
+    let Some(path) = &state.storage_path else {
+        return Ok(());
+    };
+
+    if let Some(directory) = path.parent() {
+        fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    }
+
+    let contents = serde_json::to_string_pretty(&state.data).map_err(|error| error.to_string())?;
+    let temporary_path = path.with_extension("json.tmp");
+    fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
+    fs::rename(&temporary_path, path).map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
@@ -703,6 +789,13 @@ pub fn run() {
             if let Err(error) = panic::catch_unwind(AssertUnwindSafe(|| {
                 #[cfg(target_os = "macos")]
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+                let setup_app = app.handle().clone();
+                if let Err(error) = initialize_persisted_state(&setup_app) {
+                    let message = format!("Failed to load persisted app state: {error}");
+                    eprintln!("{message}");
+                    emit_log(&setup_app, &message);
+                }
 
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_always_on_top(true);
