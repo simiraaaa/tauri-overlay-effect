@@ -1,9 +1,12 @@
 <script lang="ts">
+  import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { chapterIndex } from "$lib/scripts/app";
   import { getAppBridge } from "$lib/scripts/app-bridge";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
 	let appBridge: AppBridge | undefined;
+  let closeUnlisten: UnlistenFn | undefined;
   let chapterDraft = $state("");
   let lineNumber = $state($chapterIndex + 1);
   $effect(() => {
@@ -12,10 +15,22 @@
 
   let saved = $state(false);
 
-  onMount(async () => {
-    appBridge = await getAppBridge();
-    if (!appBridge) return;
-    chapterDraft = await appBridge.getChapterText();
+  onMount(() => {
+    const currentWindow = getCurrentWindow();
+    void (async () => {
+      closeUnlisten = await currentWindow.onCloseRequested(async (event) => {
+        event.preventDefault();
+        await currentWindow.hide();
+      });
+
+      appBridge = await getAppBridge();
+      if (!appBridge) return;
+      chapterDraft = await appBridge.getChapterText();
+    })();
+  });
+
+  onDestroy(() => {
+    closeUnlisten?.();
   });
 
   const onInput = () => {

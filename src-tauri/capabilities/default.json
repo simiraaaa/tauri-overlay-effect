@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default permissions for the overlay window.",
   "windows": ["main", "chapter-setting"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-hide"]
 }
