@@ -24,11 +24,6 @@ use tauri::{
 const MENU_TOGGLE_OVERLAY: &str = "toggle-overlay";
 const MENU_TOGGLE_MOUSE: &str = "toggle-mouse";
 const MENU_TOGGLE_KEYBOARD: &str = "toggle-keyboard";
-const MENU_TOGGLE_CHAPTER: &str = "toggle-chapter";
-const MENU_PREVIOUS_CHAPTER: &str = "previous-chapter";
-const MENU_NEXT_CHAPTER: &str = "next-chapter";
-const MENU_RESTART_CHAPTER: &str = "restart-chapter";
-const MENU_TOGGLE_TIMER_PAUSE: &str = "toggle-timer-pause";
 const MENU_RETRY_INPUT_MONITORING: &str = "retry-input-monitoring";
 const MENU_QUIT: &str = "quit";
 
@@ -391,20 +386,6 @@ fn update_persisted_settings(
     Ok(settings)
 }
 
-fn set_chapter_index_from_menu(
-    app: &tauri::AppHandle,
-    update: impl FnOnce(usize) -> usize,
-) -> Result<ChapterIndexResult, String> {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().map_err(|error| error.to_string())?;
-    let mut next = state.data.clone();
-    let index = update(next.chapter_index);
-    let result = set_chapter_index_inner(&mut next, index);
-    save_persisted_state(&state.storage_path, &next)?;
-    state.data = next;
-    Ok(result)
-}
-
 fn emit_menu_error(app: &tauri::AppHandle, message: &str) {
     eprintln!("{message}");
     emit_log(app, message);
@@ -432,17 +413,6 @@ fn toggle_keyboard_enabled(app: &tauri::AppHandle) {
     }
 }
 
-fn toggle_chapter_enabled(app: &tauri::AppHandle) {
-    match update_persisted_settings(app, |settings| {
-        settings.enable_chapter = !settings.enable_chapter;
-    }) {
-        Ok(settings) => {
-            let _ = app.emit("change-chapter-enable", settings.enable_chapter);
-        }
-        Err(error) => emit_menu_error(app, &format!("Failed to toggle chapter display: {error}")),
-    }
-}
-
 fn toggle_timer_paused(app: &tauri::AppHandle) {
     match update_persisted_settings(app, |settings| {
         settings.timer_paused = !settings.timer_paused;
@@ -451,32 +421,6 @@ fn toggle_timer_paused(app: &tauri::AppHandle) {
             let _ = app.emit("change-timer-paused", settings.timer_paused);
         }
         Err(error) => emit_menu_error(app, &format!("Failed to toggle chapter timer pause: {error}")),
-    }
-}
-
-fn move_chapter_index(app: &tauri::AppHandle, amount: isize) {
-    let result = set_chapter_index_from_menu(app, |current| {
-        if amount.is_negative() {
-            current.saturating_sub(amount.unsigned_abs())
-        } else {
-            current.saturating_add(amount as usize)
-        }
-    });
-
-    match result {
-        Ok(result) => {
-            let _ = app.emit("change-chapter-index", result.index);
-        }
-        Err(error) => emit_menu_error(app, &format!("Failed to move chapter index: {error}")),
-    }
-}
-
-fn restart_chapter(app: &tauri::AppHandle) {
-    match set_chapter_index_from_menu(app, |_| 0) {
-        Ok(result) => {
-            let _ = app.emit("change-chapter-index", result.index);
-        }
-        Err(error) => emit_menu_error(app, &format!("Failed to restart chapter: {error}")),
     }
 }
 
@@ -521,11 +465,6 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
         }
         MENU_TOGGLE_MOUSE => toggle_mouse_enabled(app),
         MENU_TOGGLE_KEYBOARD => toggle_keyboard_enabled(app),
-        MENU_TOGGLE_CHAPTER => toggle_chapter_enabled(app),
-        MENU_PREVIOUS_CHAPTER => move_chapter_index(app, -1),
-        MENU_NEXT_CHAPTER => move_chapter_index(app, 1),
-        MENU_RESTART_CHAPTER => restart_chapter(app),
-        MENU_TOGGLE_TIMER_PAUSE => toggle_timer_paused(app),
         MENU_RETRY_INPUT_MONITORING => start_global_input_monitoring(app.clone()),
         MENU_QUIT => app.exit(0),
         _ => {}
@@ -552,24 +491,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .checked(initial_settings.enable_keyboard)
         .build(app)
         .map_err(|error| error.to_string())?;
-    let chapter_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_CHAPTER, "チャプターを表示")
-        .checked(initial_settings.enable_chapter)
-        .build(app)
-        .map_err(|error| error.to_string())?;
-    let previous_chapter = MenuItemBuilder::with_id(MENU_PREVIOUS_CHAPTER, "前のチャプター")
-        .build(app)
-        .map_err(|error| error.to_string())?;
-    let next_chapter = MenuItemBuilder::with_id(MENU_NEXT_CHAPTER, "次のチャプター")
-        .build(app)
-        .map_err(|error| error.to_string())?;
-    let restart_chapter =
-        MenuItemBuilder::with_id(MENU_RESTART_CHAPTER, "チャプターを最初から開始する")
-            .build(app)
-            .map_err(|error| error.to_string())?;
-    let toggle_timer_pause =
-        MenuItemBuilder::with_id(MENU_TOGGLE_TIMER_PAUSE, "タイマー一時停止/再開")
-            .build(app)
-            .map_err(|error| error.to_string())?;
     let retry_input_monitoring =
         MenuItemBuilder::with_id(MENU_RETRY_INPUT_MONITORING, "入力監視を再試行")
             .build(app)
@@ -583,11 +504,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
             &toggle_overlay,
             &mouse_enabled,
             &keyboard_enabled,
-            &chapter_enabled,
-            &previous_chapter,
-            &next_chapter,
-            &restart_chapter,
-            &toggle_timer_pause,
             &retry_input_monitoring,
             &quit,
         ])
