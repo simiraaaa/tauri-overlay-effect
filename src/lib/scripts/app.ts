@@ -15,6 +15,17 @@ export const init = async () => {
   const appBridge = await getAppBridge();
   if (!appBridge) return;
 
+  const updateSettings = (updater: (settings: AppData.Settings) => void) => {
+    settings.update((current) => {
+      const next = { ...current };
+      updater(next);
+      appBridge.setSettings(next).catch((error) => {
+        console.error(error);
+      });
+      return next;
+    });
+  };
+
   try {
     const s = await appBridge.getSettings();
     if (s) {
@@ -27,27 +38,23 @@ export const init = async () => {
   }
 
   appBridge.onChangeMouseEnable((checked: boolean) => {
-    settings.update((s) => {
+    updateSettings((s) => {
       s.enableMouse = checked;
-      return s;
     });
   });
   appBridge.onChangeKeyboardEnable((checked: boolean) => {
-    settings.update((s) => {
+    updateSettings((s) => {
       s.enableKeyboard = checked;
-      return s;
     });
   });
   appBridge.onChangeChapterEnable((checked: boolean) => {
-    settings.update((s) => {
+    updateSettings((s) => {
       s.enableChapter = checked;
-      return s;
     });
   });
   appBridge.onChangeTimerPaused((checked: boolean) => {
-    settings.update((s) => {
+    updateSettings((s) => {
       s.timerPaused = checked;
-      return s;
     });
   });
 
