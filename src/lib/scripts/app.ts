@@ -27,6 +27,10 @@ export const init = async () => {
     });
   };
 
+  appBridge.onChangeOverlayVisible((visible: boolean) => {
+    overlayVisible.set(visible);
+  });
+
   try {
     overlayVisible.set(await appBridge.getOverlayVisible());
     const s = await appBridge.getSettings();
@@ -43,9 +47,6 @@ export const init = async () => {
     updateSettings((s) => {
       s.enableMouse = checked;
     });
-  });
-  appBridge.onChangeOverlayVisible((visible: boolean) => {
-    overlayVisible.set(visible);
   });
   appBridge.onChangeKeyboardEnable((checked: boolean) => {
     updateSettings((s) => {
