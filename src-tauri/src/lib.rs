@@ -13,7 +13,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
-use rdev::{listen, set_listen_paused, Button, Event, EventType, Key};
+use rdev::{listen, Button, Event, EventType, Key};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
     NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
@@ -785,8 +785,6 @@ fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
 
 fn set_chapter_setting_visible_inner(app: &tauri::AppHandle, visible: bool) -> Result<(), String> {
     CHAPTER_SETTING_VISIBLE.store(visible, Ordering::SeqCst);
-    #[cfg(target_os = "macos")]
-    set_listen_paused(visible);
 
     {
         let state = app.state::<Mutex<AppState>>();

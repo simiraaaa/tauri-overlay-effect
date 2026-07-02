@@ -11,5 +11,5 @@ pub use crate::macos::display::display_size;
 #[cfg(feature = "unstable_grab")]
 pub use crate::macos::grab::grab;
 pub use crate::macos::keyboard::Keyboard;
-pub use crate::macos::listen::{listen, set_listen_paused};
+pub use crate::macos::listen::listen;
 pub use crate::macos::simulate::simulate;

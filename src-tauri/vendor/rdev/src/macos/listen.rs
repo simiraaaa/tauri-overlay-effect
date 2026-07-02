@@ -4,14 +4,8 @@ use core_graphics::event::{CGEventTapLocation, CGEventType};
 use std::panic::{self, AssertUnwindSafe};
 use std::os::raw::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
-static LISTEN_PAUSED: AtomicBool = AtomicBool::new(false);
-
-pub fn set_listen_paused(paused: bool) {
-    LISTEN_PAUSED.store(paused, Ordering::SeqCst);
-}
 
 unsafe extern "C" fn raw_callback(
     _proxy: CGEventTapProxy,
@@ -19,10 +13,6 @@ unsafe extern "C" fn raw_callback(
     cg_event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
-    if LISTEN_PAUSED.load(Ordering::SeqCst) {
-        return cg_event;
-    }
-
     let _ = panic::catch_unwind(AssertUnwindSafe(|| {
         // println!("Event ref {:?}", cg_event_ptr);
         // let cg_event: CGEvent = transmute_copy::<*mut c_void, CGEvent>(&cg_event_ptr);
