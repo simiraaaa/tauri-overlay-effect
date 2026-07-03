@@ -877,6 +877,69 @@ fn active_input_display_bounds() -> Vec<InputBounds> {
     Vec::new()
 }
 
+fn monitor_center(bounds: MonitorBounds) -> (f64, f64) {
+    (
+        bounds.x as f64 + bounds.width as f64 / 2.0,
+        bounds.y as f64 + bounds.height as f64 / 2.0,
+    )
+}
+
+fn input_center(bounds: InputBounds) -> (f64, f64) {
+    (
+        bounds.x + bounds.width / 2.0,
+        bounds.y + bounds.height / 2.0,
+    )
+}
+
+fn input_monitor_match_score(
+    primary_monitor: MonitorBounds,
+    monitor: MonitorBounds,
+    primary_input: InputBounds,
+    input: InputBounds,
+) -> f64 {
+    let (primary_monitor_x, primary_monitor_y) = monitor_center(primary_monitor);
+    let (monitor_x, monitor_y) = monitor_center(monitor);
+    let (primary_input_x, primary_input_y) = input_center(primary_input);
+    let (input_x, input_y) = input_center(input);
+
+    let monitor_dx = (monitor_x - primary_monitor_x) / primary_monitor.width.max(1) as f64;
+    let monitor_dy = (monitor_y - primary_monitor_y) / primary_monitor.height.max(1) as f64;
+    let input_dx = (input_x - primary_input_x) / primary_input.width.max(1.0);
+    let input_dy = (input_y - primary_input_y) / primary_input.height.max(1.0);
+    let y_score = (monitor_dy - input_dy)
+        .abs()
+        .min((monitor_dy + input_dy).abs());
+
+    let monitor_width_ratio = monitor.width as f64 / primary_monitor.width.max(1) as f64;
+    let monitor_height_ratio = monitor.height as f64 / primary_monitor.height.max(1) as f64;
+    let input_width_ratio = input.width / primary_input.width.max(1.0);
+    let input_height_ratio = input.height / primary_input.height.max(1.0);
+    let size_score = (monitor_width_ratio - input_width_ratio).abs()
+        + (monitor_height_ratio - input_height_ratio).abs();
+
+    (monitor_dx - input_dx).abs() + y_score + size_score
+}
+
+fn take_best_input_bounds(
+    inputs: &mut Vec<InputBounds>,
+    primary_monitor: MonitorBounds,
+    monitor: MonitorBounds,
+    primary_input: Option<InputBounds>,
+) -> Option<InputBounds> {
+    let primary_input = primary_input?;
+    let best_index = inputs
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            input_monitor_match_score(primary_monitor, monitor, primary_input, **a).total_cmp(
+                &input_monitor_match_score(primary_monitor, monitor, primary_input, **b),
+            )
+        })
+        .map(|(index, _)| index)?;
+
+    Some(inputs.remove(best_index))
+}
+
 fn set_overlay_window_infos(
     app: &tauri::AppHandle,
     infos: Vec<OverlayWindowInfo>,
@@ -930,12 +993,17 @@ fn setup_overlay_windows(app: &tauri::AppHandle) -> Result<(), String> {
         .collect::<Vec<_>>();
     secondary_monitors.sort_by_key(|bounds| (bounds.x, bounds.y, bounds.width, bounds.height));
 
-    let secondary_input_bounds = input_bounds.into_iter().skip(1).collect::<Vec<_>>();
+    let mut secondary_input_bounds = input_bounds.into_iter().skip(1).collect::<Vec<_>>();
     let mut secondary_index = 1;
 
     for bounds in secondary_monitors {
         let label = format!("{SECONDARY_OVERLAY_WINDOW_PREFIX}{secondary_index}");
-        let input_bounds = secondary_input_bounds.get(secondary_index - 1).copied();
+        let input_bounds = take_best_input_bounds(
+            &mut secondary_input_bounds,
+            primary_bounds,
+            bounds,
+            primary_input_bounds,
+        );
         secondary_index += 1;
 
         let window = if let Some(window) = app.get_webview_window(&label) {
@@ -1156,6 +1224,7 @@ fn spawn_global_input_events(
     let normalized_position = Arc::new(Mutex::new(None::<TargetedMousePosition>));
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
+    let active_key_labels = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
     let detected_keyboard_layout = Arc::new(Mutex::new(KeyboardLayout::Unknown));
     let app_for_events = app.clone();
 
@@ -1165,6 +1234,7 @@ fn spawn_global_input_events(
     let normalized_position_for_events = Arc::clone(&normalized_position);
     let pressed_keys_for_events = Arc::clone(&pressed_keys);
     let active_key_names_for_events = Arc::clone(&active_key_names);
+    let active_key_labels_for_events = Arc::clone(&active_key_labels);
     let detected_keyboard_layout_for_events = Arc::clone(&detected_keyboard_layout);
     let app_for_normalize_events = app_for_events.clone();
 
@@ -1311,15 +1381,19 @@ fn spawn_global_input_events(
                         down.insert(name.clone(), true);
                     });
                     let raw_name = name_raw.unwrap_or_else(|| name.clone());
+                    let target_label = latest_global_mouse_label(
+                        &app_for_normalize_events,
+                        &normalized_position_for_events,
+                        &cursor_position_for_events,
+                    );
+                    let _ = active_key_labels_for_events.lock().map(|mut active| {
+                        active.insert(key, target_label.clone());
+                    });
 
                     emit_key_if_state_changed(
                         &app_for_events,
                         &pressed_keys_for_events,
-                        &latest_global_mouse_label(
-                            &app_for_normalize_events,
-                            &normalized_position_for_events,
-                            &cursor_position_for_events,
-                        ),
+                        &target_label,
                         KeyEvent {
                             name: name.clone(),
                             state: "DOWN",
@@ -1346,15 +1420,22 @@ fn spawn_global_input_events(
                     let _ = pressed_keys_for_events.lock().map(|mut down| {
                         down.remove(&name);
                     });
+                    let target_label = active_key_labels_for_events
+                        .lock()
+                        .ok()
+                        .and_then(|mut active| active.remove(&key))
+                        .unwrap_or_else(|| {
+                            latest_global_mouse_label(
+                                &app_for_normalize_events,
+                                &normalized_position_for_events,
+                                &cursor_position_for_events,
+                            )
+                        });
 
                     emit_key_if_state_changed(
                         &app_for_events,
                         &pressed_keys_for_events,
-                        &latest_global_mouse_label(
-                            &app_for_normalize_events,
-                            &normalized_position_for_events,
-                            &cursor_position_for_events,
-                        ),
+                        &target_label,
                         KeyEvent {
                             name: name.clone(),
                             state: "UP",
