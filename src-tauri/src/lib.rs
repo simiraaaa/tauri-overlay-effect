@@ -10,11 +10,7 @@ use std::sync::{
 use std::thread;
 
 #[cfg(target_os = "macos")]
-use core_graphics::{
-    display::CGDisplay,
-    event::CGEvent,
-    event_source::{CGEventSource, CGEventSourceStateID},
-};
+use core_graphics::display::CGDisplay;
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior};
 #[cfg(target_os = "macos")]
@@ -1026,7 +1022,7 @@ fn setup_overlay_windows(app: &tauri::AppHandle) -> Result<(), String> {
         let window = if let Some(window) = app.get_webview_window(&label) {
             window
         } else {
-            let url = format!("index.html?overlayWindow={label}");
+            let url = format!("?overlayWindow={label}");
             WebviewWindowBuilder::new(app, label.clone(), WebviewUrl::App(url.into()))
                 .title("Overlay Effect")
                 .transparent(true)
@@ -1158,36 +1154,9 @@ fn normalize_global_mouse_position(
 }
 
 #[cfg(target_os = "macos")]
-fn current_global_mouse_position(
-    app: &tauri::AppHandle,
-    last_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
-) -> Option<TargetedMousePosition> {
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
-    let event = CGEvent::new(source).ok()?;
-    let point = event.location();
-
-    Some(normalize_global_mouse_position(
-        app,
-        point.x as i32,
-        point.y as i32,
-        last_position,
-    ))
-}
-
-#[cfg(target_os = "macos")]
 fn latest_global_mouse_position(
-    app: &tauri::AppHandle,
-    last_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
     cursor_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
 ) -> Option<TargetedMousePosition> {
-    if let Some(position) = current_global_mouse_position(app, last_position) {
-        if let Ok(mut cursor) = cursor_position.lock() {
-            *cursor = Some(position.clone());
-        }
-
-        return Some(position);
-    }
-
     cursor_position
         .lock()
         .ok()
@@ -1318,11 +1287,8 @@ fn spawn_global_input_events(
                     }
                 }
                 EventType::ButtonPress(button) => {
-                    let Some(cursor) = latest_global_mouse_position(
-                        &app_for_normalize_events,
-                        &normalized_position_for_events,
-                        &cursor_position_for_events,
-                    ) else {
+                    let Some(cursor) = latest_global_mouse_position(&cursor_position_for_events)
+                    else {
                         return;
                     };
 
@@ -1351,11 +1317,8 @@ fn spawn_global_input_events(
                     );
                 }
                 EventType::ButtonRelease(button) => {
-                    let Some(cursor) = latest_global_mouse_position(
-                        &app_for_normalize_events,
-                        &normalized_position_for_events,
-                        &cursor_position_for_events,
-                    ) else {
+                    let Some(cursor) = latest_global_mouse_position(&cursor_position_for_events)
+                    else {
                         return;
                     };
                     is_button_down.store(false, Ordering::Relaxed);
