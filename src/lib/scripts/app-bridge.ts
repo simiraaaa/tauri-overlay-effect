@@ -78,13 +78,20 @@ const createTauriBridge = async (): Promise<AppBridge> => {
     import('@tauri-apps/api/core'),
     import('@tauri-apps/api/event'),
   ]);
+  const currentWindowLabel = new URL(globalThis.location.href).searchParams.get('overlayWindow') ?? 'main';
 
   const listenPayload = async <T>(eventName: string, callback: PayloadCallback<T>): Promise<UnlistenFn> => {
     return listen<T>(eventName, (event) => callback(event.payload));
   };
+  const isTargetedForCurrentWindow = (payload: unknown): boolean => {
+    const targetLabel = (payload as { targetLabel?: string } | null)?.targetLabel;
+    return !targetLabel || targetLabel === currentWindowLabel;
+  };
 
   const bridge: AppBridge = {
     onGlobalKeyboard: (callback) => listenPayload('global-key', (payload) => {
+      if (!isTargetedForCurrentWindow(payload)) return;
+
       if (Array.isArray(payload)) {
         const [rawEvent, down] = payload as [GlobalKeyEvent, GlobalKeyDownMap];
         callback({}, rawEvent, down);
@@ -98,6 +105,8 @@ const createTauriBridge = async (): Promise<AppBridge> => {
       if (globalThis.isDev) callback(payload);
     }),
     onGlobalMouse: (callback) => listenPayload('global-mouse', (payload) => {
+      if (!isTargetedForCurrentWindow(payload)) return;
+
       callback({}, payload as GlobalMouseEvent);
     }),
     onInputMonitoringStatus: (callback) => listenPayload<InputMonitoringStatus>('input-monitoring-status', callback),

@@ -3186,6 +3186,7 @@ dependencies = [
 name = "tauri-overlay-effect"
 version = "0.1.0"
 dependencies = [
+ "core-graphics 0.19.2",
  "objc2-app-kit",
  "rdev",
  "serde",
