@@ -727,37 +727,20 @@ fn current_input_monitoring_attempt(app: &tauri::AppHandle) -> u64 {
         .unwrap_or_default()
 }
 
-fn overlay_desktop_bounds(window: &tauri::WebviewWindow) -> Option<OverlayBounds> {
-    let monitors = window.available_monitors().ok()?;
-    let mut monitors = monitors.iter();
-    let first = monitors.next()?;
-    let first_position = first.position();
-    let first_size = first.size();
-
-    let mut left = first_position.x as i64;
-    let mut top = first_position.y as i64;
-    let mut right = left + first_size.width as i64;
-    let mut bottom = top + first_size.height as i64;
-
-    for monitor in monitors {
-        let position = monitor.position();
-        let size = monitor.size();
-        let monitor_left = position.x as i64;
-        let monitor_top = position.y as i64;
-        let monitor_right = monitor_left + size.width as i64;
-        let monitor_bottom = monitor_top + size.height as i64;
-
-        left = left.min(monitor_left);
-        top = top.min(monitor_top);
-        right = right.max(monitor_right);
-        bottom = bottom.max(monitor_bottom);
-    }
+fn overlay_primary_bounds(window: &tauri::WebviewWindow) -> Option<OverlayBounds> {
+    let monitor = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.current_monitor().ok().flatten())?;
+    let position = monitor.position();
+    let size = monitor.size();
 
     Some(OverlayBounds {
-        x: left as i32,
-        y: top as i32,
-        width: (right - left).max(1) as u32,
-        height: (bottom - top).max(1) as u32,
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
     })
 }
 
@@ -785,7 +768,7 @@ fn normalize_global_mouse_position(
         return (raw_x, raw_y);
     };
 
-    let desktop = overlay_desktop_bounds(&window).unwrap_or_else(|| {
+    let desktop = overlay_primary_bounds(&window).unwrap_or_else(|| {
         let monitor = fallback_monitor_bounds(&window).unwrap_or(MonitorBounds {
             x: 0,
             y: 0,
@@ -1348,7 +1331,7 @@ fn is_printable_key_name(name: &str) -> bool {
 }
 
 fn apply_overlay_window_bounds(window: &tauri::WebviewWindow) {
-    if let Some(bounds) = overlay_desktop_bounds(window) {
+    if let Some(bounds) = overlay_primary_bounds(window) {
         let _ = window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
         let _ = window.set_size(PhysicalSize::new(bounds.width, bounds.height));
     }
@@ -1367,7 +1350,7 @@ fn apply_macos_overlay_window_level(window: &tauri::WebviewWindow) {
     let ns_window: &NSWindow = unsafe { &*ns_window };
     set_overlay_ns_window_level(ns_window);
 
-    // メニューバー領域まで含めて全ディスプレイの仮想デスクトップ矩形を覆う。
+    // メニューバー領域まで含めて primary display の矩形を覆う。
     // AppKit はメニューバーより低いレベルのウィンドウを constrainFrameRect で
     // メニューバー高さ分だけ下へ押し下げる。レベルを上げた「後」に画面全体の
     // フレームを再設定することで、この押し下げを回避しウィンドウ原点を画面最上部に揃える。
