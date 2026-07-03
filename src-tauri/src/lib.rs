@@ -10,6 +10,11 @@ use std::sync::{
 use std::thread;
 
 #[cfg(target_os = "macos")]
+use core_graphics::{
+    event::CGEvent,
+    event_source::{CGEventSource, CGEventSourceStateID},
+};
+#[cfg(target_os = "macos")]
 use objc2_app_kit::{NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior};
 #[cfg(target_os = "macos")]
 use rdev::{listen, Button, Event, EventType, Key};
@@ -151,6 +156,12 @@ struct TargetedMousePosition {
     label: String,
     x: i32,
     y: i32,
+}
+
+#[derive(Clone)]
+struct ActiveMouseOverlay {
+    button_position: &'static str,
+    target: TargetedMousePosition,
 }
 
 #[derive(Clone, Serialize)]
@@ -979,16 +990,76 @@ fn normalize_global_mouse_position(
 }
 
 #[cfg(target_os = "macos")]
+fn current_global_mouse_position(
+    app: &tauri::AppHandle,
+    last_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
+) -> Option<TargetedMousePosition> {
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let point = event.location();
+
+    Some(normalize_global_mouse_position(
+        app,
+        point.x as i32,
+        point.y as i32,
+        last_position,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn latest_global_mouse_position(
+    app: &tauri::AppHandle,
+    last_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
+    cursor_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
+) -> Option<TargetedMousePosition> {
+    if let Some(position) = current_global_mouse_position(app, last_position) {
+        if let Ok(mut cursor) = cursor_position.lock() {
+            *cursor = Some(position.clone());
+        }
+
+        return Some(position);
+    }
+
+    cursor_position
+        .lock()
+        .ok()
+        .and_then(|position| position.clone())
+}
+
+#[cfg(target_os = "macos")]
+fn clear_previous_mouse_overlay(
+    app: &tauri::AppHandle,
+    previous: Option<ActiveMouseOverlay>,
+    current_label: &str,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+
+    if previous.target.label == current_label {
+        return;
+    }
+
+    emit_global_mouse_event(
+        app,
+        &previous.target.label,
+        MouseEvent {
+            position: previous.button_position,
+            event_type: "up",
+            x: previous.target.x,
+            y: previous.target.y,
+        },
+    );
+}
+
+#[cfg(target_os = "macos")]
 fn spawn_global_input_events(
     app: tauri::AppHandle,
     event_seen: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let is_button_down = Arc::new(AtomicBool::new(false));
-    let cursor_position = Arc::new(Mutex::new(TargetedMousePosition {
-        label: PRIMARY_OVERLAY_WINDOW_LABEL.to_string(),
-        x: 0,
-        y: 0,
-    }));
+    let cursor_position = Arc::new(Mutex::new(None::<TargetedMousePosition>));
+    let active_mouse_position = Arc::new(Mutex::new(None::<ActiveMouseOverlay>));
     let normalized_position = Arc::new(Mutex::new(None::<TargetedMousePosition>));
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
@@ -997,6 +1068,7 @@ fn spawn_global_input_events(
 
     let is_button_down_for_events = Arc::clone(&is_button_down);
     let cursor_position_for_events = Arc::clone(&cursor_position);
+    let active_mouse_position_for_events = Arc::clone(&active_mouse_position);
     let normalized_position_for_events = Arc::clone(&normalized_position);
     let pressed_keys_for_events = Arc::clone(&pressed_keys);
     let active_key_names_for_events = Arc::clone(&active_key_names);
@@ -1031,15 +1103,31 @@ fn spawn_global_input_events(
                         &normalized_position_for_events,
                     );
                     if let Ok(mut current_position) = cursor_position_for_events.lock() {
-                        *current_position = position.clone();
+                        *current_position = Some(position.clone());
                     }
 
                     if is_button_down_for_events.load(Ordering::Relaxed) {
+                        let previous = active_mouse_position_for_events
+                            .lock()
+                            .ok()
+                            .and_then(|position| position.clone());
+                        let button_position = previous
+                            .as_ref()
+                            .map(|position| position.button_position)
+                            .unwrap_or("left");
+                        clear_previous_mouse_overlay(&app_for_events, previous, &position.label);
+                        if let Ok(mut active) = active_mouse_position_for_events.lock() {
+                            *active = Some(ActiveMouseOverlay {
+                                button_position,
+                                target: position.clone(),
+                            });
+                        }
+
                         emit_global_mouse_event(
                             &app_for_events,
                             &position.label,
                             MouseEvent {
-                                position: "left",
+                                position: button_position,
                                 event_type: "drag",
                                 x: position.x,
                                 y: position.y,
@@ -1048,22 +1136,26 @@ fn spawn_global_input_events(
                     }
                 }
                 EventType::ButtonPress(button) => {
-                    let cursor = cursor_position_for_events
-                        .lock()
-                        .map(|position| position.clone())
-                        .unwrap_or(TargetedMousePosition {
-                            label: PRIMARY_OVERLAY_WINDOW_LABEL.to_string(),
-                            x: 0,
-                            y: 0,
-                        });
+                    let Some(cursor) = latest_global_mouse_position(
+                        &app_for_normalize_events,
+                        &normalized_position_for_events,
+                        &cursor_position_for_events,
+                    ) else {
+                        return;
+                    };
 
                     is_button_down.store(true, Ordering::Relaxed);
-
                     let position = match button {
                         Button::Left => "left",
                         Button::Right => "right",
                         _ => "other",
                     };
+                    if let Ok(mut active) = active_mouse_position_for_events.lock() {
+                        *active = Some(ActiveMouseOverlay {
+                            button_position: position,
+                            target: cursor.clone(),
+                        });
+                    }
 
                     emit_global_mouse_event(
                         &app_for_events,
@@ -1077,14 +1169,13 @@ fn spawn_global_input_events(
                     );
                 }
                 EventType::ButtonRelease(button) => {
-                    let cursor = cursor_position_for_events
-                        .lock()
-                        .map(|position| position.clone())
-                        .unwrap_or(TargetedMousePosition {
-                            label: PRIMARY_OVERLAY_WINDOW_LABEL.to_string(),
-                            x: 0,
-                            y: 0,
-                        });
+                    let Some(cursor) = latest_global_mouse_position(
+                        &app_for_normalize_events,
+                        &normalized_position_for_events,
+                        &cursor_position_for_events,
+                    ) else {
+                        return;
+                    };
                     is_button_down.store(false, Ordering::Relaxed);
 
                     let position = match button {
@@ -1092,6 +1183,15 @@ fn spawn_global_input_events(
                         Button::Right => "right",
                         _ => "other",
                     };
+
+                    let previous = active_mouse_position_for_events
+                        .lock()
+                        .ok()
+                        .and_then(|position| position.clone());
+                    clear_previous_mouse_overlay(&app_for_events, previous, &cursor.label);
+                    if let Ok(mut active) = active_mouse_position_for_events.lock() {
+                        *active = None;
+                    }
 
                     emit_global_mouse_event(
                         &app_for_events,
