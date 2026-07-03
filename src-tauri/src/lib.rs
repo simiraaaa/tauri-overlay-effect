@@ -1225,6 +1225,7 @@ fn spawn_global_input_events(
     let pressed_keys = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let active_key_names = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
     let active_key_labels = Arc::new(Mutex::new(HashMap::<Key, String>::new()));
+    let active_keyboard_target = Arc::new(Mutex::new(None::<String>));
     let detected_keyboard_layout = Arc::new(Mutex::new(KeyboardLayout::Unknown));
     let app_for_events = app.clone();
 
@@ -1235,6 +1236,7 @@ fn spawn_global_input_events(
     let pressed_keys_for_events = Arc::clone(&pressed_keys);
     let active_key_names_for_events = Arc::clone(&active_key_names);
     let active_key_labels_for_events = Arc::clone(&active_key_labels);
+    let active_keyboard_target_for_events = Arc::clone(&active_keyboard_target);
     let detected_keyboard_layout_for_events = Arc::clone(&detected_keyboard_layout);
     let app_for_normalize_events = app_for_events.clone();
 
@@ -1381,11 +1383,22 @@ fn spawn_global_input_events(
                         down.insert(name.clone(), true);
                     });
                     let raw_name = name_raw.unwrap_or_else(|| name.clone());
-                    let target_label = latest_global_mouse_label(
-                        &app_for_normalize_events,
-                        &normalized_position_for_events,
-                        &cursor_position_for_events,
-                    );
+                    let target_label = active_keyboard_target_for_events
+                        .lock()
+                        .ok()
+                        .and_then(|target| target.clone())
+                        .unwrap_or_else(|| {
+                            latest_global_mouse_label(
+                                &app_for_normalize_events,
+                                &normalized_position_for_events,
+                                &cursor_position_for_events,
+                            )
+                        });
+                    let _ = active_keyboard_target_for_events.lock().map(|mut target| {
+                        if target.is_none() {
+                            *target = Some(target_label.clone());
+                        }
+                    });
                     let _ = active_key_labels_for_events.lock().map(|mut active| {
                         active.insert(key, target_label.clone());
                     });
@@ -1431,6 +1444,10 @@ fn spawn_global_input_events(
                                 &cursor_position_for_events,
                             )
                         });
+                    let should_clear_keyboard_target = pressed_keys_for_events
+                        .lock()
+                        .map(|down| down.is_empty())
+                        .unwrap_or(false);
 
                     emit_key_if_state_changed(
                         &app_for_events,
@@ -1446,6 +1463,12 @@ fn spawn_global_input_events(
                             },
                         },
                     );
+
+                    if should_clear_keyboard_target {
+                        let _ = active_keyboard_target_for_events.lock().map(|mut target| {
+                            *target = None;
+                        });
+                    }
                 }
                 _ => {}
             }
