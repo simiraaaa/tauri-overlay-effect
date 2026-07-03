@@ -130,6 +130,14 @@ struct MouseEvent {
 }
 
 #[derive(Clone, Serialize)]
+struct TargetedMouseEvent<'a> {
+    #[serde(rename = "targetLabel")]
+    target_label: &'a str,
+    #[serde(flatten)]
+    event: MouseEvent,
+}
+
+#[derive(Clone, Serialize)]
 struct InputMonitoringStatus {
     state: &'static str,
     message: String,
@@ -190,6 +198,14 @@ struct KeyEvent {
     keyboard_layout: KeyboardLayout,
     #[serde(rename = "rawKey")]
     raw_key: RawKey,
+}
+
+#[derive(Clone, Serialize)]
+struct TargetedKeyEvent<'a> {
+    #[serde(rename = "targetLabel")]
+    target_label: &'a str,
+    event: KeyEvent,
+    down: &'a HashMap<String, bool>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize)]
@@ -709,12 +725,13 @@ fn register_global_shortcuts(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn emit_global_mouse_event(app: &tauri::AppHandle, label: &str, event: MouseEvent) {
-    if let Some(window) = app.get_webview_window(label) {
-        if let Err(error) = window.emit("global-mouse", event) {
-            eprintln!("Failed to emit global mouse event to {label}: {error:?}");
-        }
-    } else {
-        eprintln!("Failed to emit global mouse event: overlay window {label} was not found");
+    let payload = TargetedMouseEvent {
+        target_label: label,
+        event,
+    };
+
+    if let Err(error) = app.emit("global-mouse", payload) {
+        eprintln!("Failed to emit global mouse event: {error:?}");
     }
 }
 
@@ -724,14 +741,14 @@ fn emit_global_key_event(
     event: KeyEvent,
     down: &HashMap<String, bool>,
 ) {
-    let payload = (event, down);
+    let payload = TargetedKeyEvent {
+        target_label: label,
+        event,
+        down,
+    };
 
-    if let Some(window) = app.get_webview_window(label) {
-        if let Err(error) = window.emit("global-key", &payload) {
-            eprintln!("Failed to emit global keyboard event to {label}: {error:?}");
-        }
-    } else if let Err(error) = app.emit("global-key", payload) {
-        eprintln!("Failed to emit global keyboard event fallback: {error:?}");
+    if let Err(error) = app.emit("global-key", payload) {
+        eprintln!("Failed to emit global keyboard event: {error:?}");
     }
 }
 
@@ -1177,12 +1194,11 @@ fn latest_global_mouse_position(
 }
 
 #[cfg(target_os = "macos")]
-fn latest_global_mouse_label(
-    app: &tauri::AppHandle,
-    last_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
-    cursor_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
-) -> String {
-    latest_global_mouse_position(app, last_position, cursor_position)
+fn latest_known_mouse_label(cursor_position: &Arc<Mutex<Option<TargetedMousePosition>>>) -> String {
+    cursor_position
+        .lock()
+        .ok()
+        .and_then(|position| position.clone())
         .map(|position| position.label)
         .unwrap_or_else(|| PRIMARY_OVERLAY_WINDOW_LABEL.to_string())
 }
@@ -1387,13 +1403,7 @@ fn spawn_global_input_events(
                         .lock()
                         .ok()
                         .and_then(|target| target.clone())
-                        .unwrap_or_else(|| {
-                            latest_global_mouse_label(
-                                &app_for_normalize_events,
-                                &normalized_position_for_events,
-                                &cursor_position_for_events,
-                            )
-                        });
+                        .unwrap_or_else(|| latest_known_mouse_label(&cursor_position_for_events));
                     let _ = active_keyboard_target_for_events.lock().map(|mut target| {
                         if target.is_none() {
                             *target = Some(target_label.clone());
@@ -1437,13 +1447,7 @@ fn spawn_global_input_events(
                         .lock()
                         .ok()
                         .and_then(|mut active| active.remove(&key))
-                        .unwrap_or_else(|| {
-                            latest_global_mouse_label(
-                                &app_for_normalize_events,
-                                &normalized_position_for_events,
-                                &cursor_position_for_events,
-                            )
-                        });
+                        .unwrap_or_else(|| latest_known_mouse_label(&cursor_position_for_events));
                     let should_clear_keyboard_target = pressed_keys_for_events
                         .lock()
                         .map(|down| down.is_empty())

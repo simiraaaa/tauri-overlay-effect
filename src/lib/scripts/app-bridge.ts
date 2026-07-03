@@ -74,25 +74,25 @@ const isTauriRuntime = (): boolean => {
 };
 
 const createTauriBridge = async (): Promise<AppBridge> => {
-  const [{ invoke }, { listen }, { getCurrentWebviewWindow }] = await Promise.all([
+  const [{ invoke }, { listen }, { getCurrentWindow }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@tauri-apps/api/event'),
-    import('@tauri-apps/api/webviewWindow'),
+    import('@tauri-apps/api/window'),
   ]);
-  const currentWebviewWindow = getCurrentWebviewWindow();
+  const currentWindowLabel = getCurrentWindow().label;
 
   const listenPayload = async <T>(eventName: string, callback: PayloadCallback<T>): Promise<UnlistenFn> => {
     return listen<T>(eventName, (event) => callback(event.payload));
   };
-  const listenCurrentWindowPayload = async <T>(
-    eventName: string,
-    callback: PayloadCallback<T>,
-  ): Promise<UnlistenFn> => {
-    return currentWebviewWindow.listen<T>(eventName, (event) => callback(event.payload));
+  const isTargetedForCurrentWindow = (payload: unknown): boolean => {
+    const targetLabel = (payload as { targetLabel?: string } | null)?.targetLabel;
+    return !targetLabel || targetLabel === currentWindowLabel;
   };
 
   const bridge: AppBridge = {
-    onGlobalKeyboard: (callback) => listenCurrentWindowPayload('global-key', (payload) => {
+    onGlobalKeyboard: (callback) => listenPayload('global-key', (payload) => {
+      if (!isTargetedForCurrentWindow(payload)) return;
+
       if (Array.isArray(payload)) {
         const [rawEvent, down] = payload as [GlobalKeyEvent, GlobalKeyDownMap];
         callback({}, rawEvent, down);
@@ -105,10 +105,12 @@ const createTauriBridge = async (): Promise<AppBridge> => {
     onLog: (callback) => listenPayload('log', (payload) => {
       if (globalThis.isDev) callback(payload);
     }),
-    onGlobalMouse: (callback) => listenCurrentWindowPayload('global-mouse', (payload) => {
+    onGlobalMouse: (callback) => listenPayload('global-mouse', (payload) => {
+      if (!isTargetedForCurrentWindow(payload)) return;
+
       callback({}, payload as GlobalMouseEvent);
     }),
-    onInputMonitoringStatus: (callback) => listenCurrentWindowPayload<InputMonitoringStatus>('input-monitoring-status', callback),
+    onInputMonitoringStatus: (callback) => listenPayload<InputMonitoringStatus>('input-monitoring-status', callback),
     onChangeOverlayVisible: (callback) => listenPayload<boolean>('change-overlay-visible', callback),
     onChangeMouseEnable: (callback) => listenPayload<boolean>('change-mouse-enable', callback),
     onChangeKeyboardEnable: (callback) => listenPayload<boolean>('change-keyboard-enable', callback),
