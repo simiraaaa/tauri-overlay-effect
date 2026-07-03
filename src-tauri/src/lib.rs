@@ -1,33 +1,46 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::panic::{self, AssertUnwindSafe};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
-use rdev::{listen, Button, Event, EventType, Key};
+use rdev::{listen, set_listen_paused, Button, Event, EventType, Key};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
     NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
 };
 use tauri::{
-    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
+    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::TrayIconBuilder,
-    Emitter, Manager, PhysicalPosition, PhysicalSize,
+    Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
 
 const MENU_TOGGLE_OVERLAY: &str = "toggle-overlay";
 const MENU_TOGGLE_MOUSE: &str = "toggle-mouse";
 const MENU_TOGGLE_KEYBOARD: &str = "toggle-keyboard";
+const MENU_OPEN_CHAPTER_SETTING: &str = "open-chapter-setting";
+const MENU_TOGGLE_CHAPTER: &str = "toggle-chapter";
+const MENU_PREVIOUS_CHAPTER: &str = "previous-chapter";
+const MENU_NEXT_CHAPTER: &str = "next-chapter";
+const MENU_RESTART_CHAPTER: &str = "restart-chapter";
+const MENU_TOGGLE_CHAPTER_PAUSE: &str = "toggle-chapter-pause";
+const MENU_COPY_CHAPTER_LAPS: &str = "copy-chapter-laps";
 const MENU_RETRY_INPUT_MONITORING: &str = "retry-input-monitoring";
 const MENU_QUIT: &str = "quit";
+const CHAPTER_SETTING_WINDOW_LABEL: &str = "chapter-setting";
+const CHAPTER_SETTING_ROUTE: &str = "chapter-setting";
 
 static INPUT_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
+static CHAPTER_SETTING_OPENED: AtomicBool = AtomicBool::new(false);
 
 struct AppState {
     storage_path: Option<PathBuf>,
@@ -43,12 +56,14 @@ struct TrayMenuItems {
     overlay: CheckMenuItem<tauri::Wry>,
     mouse: CheckMenuItem<tauri::Wry>,
     keyboard: CheckMenuItem<tauri::Wry>,
+    chapter: CheckMenuItem<tauri::Wry>,
 }
 
 struct TrayCheckState {
     overlay_visible: bool,
     mouse_enabled: bool,
     keyboard_enabled: bool,
+    chapter_enabled: bool,
 }
 
 impl Default for AppState {
@@ -100,6 +115,12 @@ struct PersistedState {
     chapter_text: String,
     #[serde(default, rename = "chapterIndex")]
     chapter_index: usize,
+    #[serde(default, rename = "chapterTimer")]
+    chapter_timer: u64,
+    #[serde(default, rename = "chapterPausedTime")]
+    chapter_paused_time: u64,
+    #[serde(default, rename = "chapterLaps")]
+    chapter_laps: Vec<u64>,
 }
 
 fn default_enabled() -> bool {
@@ -203,8 +224,41 @@ fn get_input_monitoring_status(state: tauri::State<'_, Mutex<AppState>>) -> Inpu
 
 #[tauri::command]
 fn retry_input_monitoring(app: tauri::AppHandle) -> Result<(), String> {
+    if !CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
+        set_chapter_input_paused_inner(&app, false);
+    }
     start_global_input_monitoring(app);
     Ok(())
+}
+
+#[tauri::command]
+fn set_chapter_input_paused(app: tauri::AppHandle, paused: bool) {
+    set_chapter_input_paused_inner(&app, paused);
+}
+
+fn set_chapter_input_paused_inner(app: &tauri::AppHandle, paused: bool) {
+    CHAPTER_SETTING_OPENED.store(paused, Ordering::SeqCst);
+    #[cfg(target_os = "macos")]
+    set_listen_paused(paused);
+
+    let status = if paused {
+        InputMonitoringStatus {
+            state: "disabled",
+            message: "Keyboard input monitoring is paused after opening chapter settings.".to_string(),
+            guidance: Some(
+                "Use the tray menu to retry mouse monitoring after closing chapter settings. Restart the app to re-enable keyboard input monitoring safely.".to_string(),
+            ),
+            can_retry: true,
+        }
+    } else {
+        InputMonitoringStatus {
+            state: "active",
+            message: "Global input monitoring is active.".to_string(),
+            guidance: None,
+            can_retry: false,
+        }
+    };
+    emit_input_monitoring_status(app, status);
 }
 
 #[tauri::command]
@@ -248,11 +302,13 @@ fn set_chapter_text(
     if next.chapter_index > last {
         next.chapter_index = last;
     }
+    let next_index = next.chapter_index;
     save_persisted_state(&state.storage_path, &next)?;
     state.data = next;
+    drop(state);
 
     let _ = app.emit("change-chapter-text", text);
-    let _ = app.emit("change-chapter-index", state.data.chapter_index);
+    let _ = app.emit("change-chapter-index", next_index);
     Ok(())
 }
 
@@ -275,6 +331,8 @@ fn set_chapter_index(
     let result = set_chapter_index_inner(&mut next, index);
     save_persisted_state(&state.storage_path, &next)?;
     state.data = next;
+    drop(state);
+
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
@@ -292,13 +350,25 @@ fn add_chapter_index(
     let result = set_chapter_index_inner(&mut next_state, next);
     save_persisted_state(&state.storage_path, &next_state)?;
     state.data = next_state;
+    drop(state);
+
     let _ = app.emit("change-chapter-index", result.index);
     Ok(result)
 }
 
 fn set_chapter_index_inner(state: &mut PersistedState, index: usize) -> ChapterIndexResult {
     let last = last_chapter_index(&state.chapter_text);
-    state.chapter_index = index.min(last);
+    let current = state.chapter_index;
+    let next = index.min(last);
+
+    for _ in current..next {
+        add_chapter_lap(state);
+    }
+    for _ in next..current {
+        pop_chapter_lap(state);
+    }
+
+    state.chapter_index = next;
 
     ChapterIndexResult {
         index: state.chapter_index,
@@ -308,6 +378,80 @@ fn set_chapter_index_inner(state: &mut PersistedState, index: usize) -> ChapterI
 
 fn last_chapter_index(text: &str) -> usize {
     text.lines().count().saturating_sub(1)
+}
+
+fn current_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
+}
+
+fn start_chapter_timer(state: &mut PersistedState) {
+    if state.chapter_timer == 0 {
+        state.chapter_timer = current_time_millis();
+        state.chapter_laps = Vec::new();
+        state.chapter_paused_time = 0;
+        state.settings.timer_paused = false;
+        return;
+    }
+
+    if state.chapter_paused_time != 0 {
+        let diff = current_time_millis().saturating_sub(state.chapter_paused_time);
+        state.chapter_timer = state.chapter_timer.saturating_add(diff);
+        state.chapter_paused_time = 0;
+        state.settings.timer_paused = false;
+    }
+}
+
+fn pause_chapter_timer(state: &mut PersistedState) {
+    if state.chapter_timer != 0 && state.chapter_paused_time == 0 {
+        state.chapter_paused_time = current_time_millis();
+        state.settings.timer_paused = true;
+    }
+}
+
+fn toggle_chapter_pause_state(state: &mut PersistedState) {
+    if state.chapter_paused_time == 0 {
+        pause_chapter_timer(state);
+    } else {
+        start_chapter_timer(state);
+    }
+}
+
+fn reset_chapter_timer(state: &mut PersistedState) {
+    state.chapter_timer = 0;
+    state.chapter_paused_time = 0;
+    state.chapter_laps = Vec::new();
+    state.settings.timer_paused = false;
+}
+
+fn add_chapter_lap(state: &mut PersistedState) {
+    if state.chapter_timer == 0 {
+        return;
+    }
+
+    let mut timer = state.chapter_timer;
+    if state.chapter_paused_time != 0 {
+        timer = timer.saturating_add(current_time_millis().saturating_sub(state.chapter_paused_time));
+    }
+    let lap = current_time_millis().saturating_sub(timer);
+    state.chapter_laps.push(lap);
+}
+
+fn pop_chapter_lap(state: &mut PersistedState) -> Option<u64> {
+    if state.chapter_timer == 0 {
+        return None;
+    }
+
+    state.chapter_laps.pop()
+}
+
+fn calculated_chapter_laps(state: &PersistedState) -> Vec<u64> {
+    let mut laps = Vec::with_capacity(state.chapter_laps.len() + 1);
+    laps.push(0);
+    laps.extend(state.chapter_laps.iter().copied());
+    laps
 }
 
 fn initialize_persisted_state(app: &tauri::AppHandle) -> Result<(), String> {
@@ -440,6 +584,7 @@ fn current_tray_sync_snapshot(app: &tauri::AppHandle) -> Option<TraySyncSnapshot
                 overlay_visible: state.overlay_visible,
                 mouse_enabled: state.data.settings.enable_mouse,
                 keyboard_enabled: state.data.settings.enable_keyboard,
+                chapter_enabled: state.data.settings.enable_chapter,
             },
         }),
         Err(error) => {
@@ -467,6 +612,22 @@ fn sync_tray_check_items(app: &tauri::AppHandle) {
     if let Err(error) = items.keyboard.set_checked(snapshot.state.keyboard_enabled) {
         emit_menu_error(app, &format!("Failed to sync keyboard tray check state: {error}"));
     }
+    if let Err(error) = items.chapter.set_checked(snapshot.state.chapter_enabled) {
+        emit_menu_error(app, &format!("Failed to sync chapter tray check state: {error}"));
+    }
+}
+
+fn update_persisted_data(
+    app: &tauri::AppHandle,
+    update: impl FnOnce(&mut PersistedState),
+) -> Result<PersistedState, String> {
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().map_err(|error| error.to_string())?;
+    let mut next = state.data.clone();
+    update(&mut next);
+    save_persisted_state(&state.storage_path, &next)?;
+    state.data = next.clone();
+    Ok(next)
 }
 
 fn toggle_mouse_enabled(app: &tauri::AppHandle) -> Option<bool> {
@@ -500,14 +661,171 @@ fn toggle_keyboard_enabled(app: &tauri::AppHandle) -> Option<bool> {
 }
 
 fn toggle_timer_paused(app: &tauri::AppHandle) {
-    match update_persisted_settings(app, |settings| {
-        settings.timer_paused = !settings.timer_paused;
+    match update_persisted_data(app, |state| {
+        toggle_chapter_pause_state(state);
     }) {
-        Ok(settings) => {
-            let _ = app.emit("change-timer-paused", settings.timer_paused);
+        Ok(state) => {
+            let _ = app.emit("change-timer-paused", state.settings.timer_paused);
         }
         Err(error) => emit_menu_error(app, &format!("Failed to toggle chapter timer pause: {error}")),
     }
+}
+
+fn toggle_chapter_enabled(app: &tauri::AppHandle) -> Option<bool> {
+    match update_persisted_data(app, |state| {
+        state.settings.enable_chapter = !state.settings.enable_chapter;
+        if state.settings.enable_chapter {
+            start_chapter_timer(state);
+        } else {
+            pause_chapter_timer(state);
+        }
+    }) {
+        Ok(state) => {
+            let _ = app.emit("change-chapter-enable", state.settings.enable_chapter);
+            let _ = app.emit("change-timer-paused", state.settings.timer_paused);
+            Some(state.settings.enable_chapter)
+        }
+        Err(error) => {
+            emit_menu_error(app, &format!("Failed to toggle chapter display: {error}"));
+            None
+        }
+    }
+}
+
+fn set_chapter_index_from_menu(app: &tauri::AppHandle, num: isize) {
+    match update_persisted_data(app, |state| {
+        let current = state.chapter_index as isize;
+        let next = current.saturating_add(num).max(0) as usize;
+        set_chapter_index_inner(state, next);
+    }) {
+        Ok(state) => {
+            let _ = app.emit("change-chapter-index", state.chapter_index);
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to change chapter index: {error}")),
+    }
+}
+
+fn restart_chapter(app: &tauri::AppHandle) {
+    match update_persisted_data(app, |state| {
+        reset_chapter_timer(state);
+        set_chapter_index_inner(state, 0);
+        if state.settings.enable_chapter {
+            start_chapter_timer(state);
+        }
+    }) {
+        Ok(state) => {
+            let _ = app.emit("change-chapter-index", state.chapter_index);
+            let _ = app.emit("change-timer-paused", state.settings.timer_paused);
+            if state.settings.enable_chapter {
+                let _ = app.emit("change-chapter-enable", false);
+                let _ = app.emit("change-chapter-enable", true);
+            }
+        }
+        Err(error) => emit_menu_error(app, &format!("Failed to restart chapter: {error}")),
+    }
+}
+
+fn format_chapter_time(time_millis: u64, is_over_hour: bool) -> String {
+    let total_seconds = time_millis / 1000;
+    let hours = total_seconds / 60 / 60;
+    let minutes = (total_seconds / 60) % 60;
+    let seconds = total_seconds % 60;
+
+    if is_over_hour {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+fn chapter_lap_text(state: &PersistedState) -> String {
+    let laps = calculated_chapter_laps(state);
+    let is_over_hour = laps.last().copied().unwrap_or_default() >= 60 * 60 * 1000;
+
+    state
+        .chapter_text
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let lap = laps.get(index).copied().unwrap_or_default();
+            format!("{} {}. {}", format_chapter_time(lap, is_over_hour), index + 1, line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(target_os = "macos")]
+fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to start pbcopy: {error}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open pbcopy stdin".to_string())?;
+    stdin
+        .write_all(text.as_bytes())
+        .map_err(|error| format!("Failed to write clipboard text: {error}"))?;
+    drop(stdin);
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("Failed to wait for pbcopy: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pbcopy exited with {status}"))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn copy_text_to_clipboard(_text: &str) -> Result<(), String> {
+    Err("Chapter lap copy is only implemented on macOS.".to_string())
+}
+
+fn copy_chapter_lap_text(app: &tauri::AppHandle) {
+    let text = match app.state::<Mutex<AppState>>().lock() {
+        Ok(state) => chapter_lap_text(&state.data),
+        Err(error) => {
+            emit_menu_error(app, &format!("Failed to read chapter text: {error}"));
+            return;
+        }
+    };
+
+    if let Err(error) = copy_text_to_clipboard(&text) {
+        emit_menu_error(app, &format!("Failed to copy chapter lap text: {error}"));
+    }
+}
+
+fn open_chapter_setting_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL) {
+        let _ = window.show();
+        set_chapter_input_paused_inner(app, true);
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let main_window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window is not available.".to_string())?;
+    let window = WebviewWindowBuilder::new(
+        &main_window,
+        CHAPTER_SETTING_WINDOW_LABEL,
+        WebviewUrl::App(CHAPTER_SETTING_ROUTE.into()),
+    )
+    .title("チャプター設定")
+    .inner_size(400.0, 500.0)
+    .resizable(true)
+    .always_on_top(true)
+    .build()
+    .map_err(|error| error.to_string())?;
+
+    let _ = window.center();
+    set_chapter_input_paused_inner(app, true);
+    let _ = window.set_focus();
+    Ok(())
 }
 
 fn configure_overlay_window(window: &tauri::WebviewWindow) {
@@ -555,7 +873,24 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
         MENU_TOGGLE_KEYBOARD => {
             let _ = toggle_keyboard_enabled(app);
         }
-        MENU_RETRY_INPUT_MONITORING => start_global_input_monitoring(app.clone()),
+        MENU_OPEN_CHAPTER_SETTING => {
+            if let Err(error) = open_chapter_setting_window(app) {
+                emit_menu_error(app, &format!("Failed to open chapter settings: {error}"));
+            }
+        }
+        MENU_TOGGLE_CHAPTER => {
+            let _ = toggle_chapter_enabled(app);
+        }
+        MENU_PREVIOUS_CHAPTER => set_chapter_index_from_menu(app, -1),
+        MENU_NEXT_CHAPTER => set_chapter_index_from_menu(app, 1),
+        MENU_RESTART_CHAPTER => restart_chapter(app),
+        MENU_TOGGLE_CHAPTER_PAUSE => toggle_timer_paused(app),
+        MENU_COPY_CHAPTER_LAPS => copy_chapter_lap_text(app),
+        MENU_RETRY_INPUT_MONITORING => {
+            if let Err(error) = retry_input_monitoring(app.clone()) {
+                emit_menu_error(app, &format!("Failed to retry input monitoring: {error}"));
+            }
+        }
         MENU_QUIT => app.exit(0),
         _ => {}
     }
@@ -581,6 +916,43 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
         .checked(initial_settings.enable_keyboard)
         .build(app)
         .map_err(|error| error.to_string())?;
+    let open_chapter_setting =
+        MenuItemBuilder::with_id(MENU_OPEN_CHAPTER_SETTING, "チャプター設定画面を開く")
+            .build(app)
+            .map_err(|error| error.to_string())?;
+    let chapter_enabled = CheckMenuItemBuilder::with_id(MENU_TOGGLE_CHAPTER, "チャプターを表示")
+        .checked(initial_settings.enable_chapter)
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let previous_chapter = MenuItemBuilder::with_id(MENU_PREVIOUS_CHAPTER, "前のチャプター")
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let next_chapter = MenuItemBuilder::with_id(MENU_NEXT_CHAPTER, "次のチャプター")
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let restart_chapter = MenuItemBuilder::with_id(MENU_RESTART_CHAPTER, "チャプターを最初から開始する")
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    let toggle_chapter_pause =
+        MenuItemBuilder::with_id(MENU_TOGGLE_CHAPTER_PAUSE, "タイマー一時停止/再開")
+            .build(app)
+            .map_err(|error| error.to_string())?;
+    let copy_chapter_laps =
+        MenuItemBuilder::with_id(MENU_COPY_CHAPTER_LAPS, "ラップタイム付きでチャプターテキストをコピー")
+            .build(app)
+            .map_err(|error| error.to_string())?;
+    let chapter_menu = SubmenuBuilder::new(app, "チャプターテキスト設定")
+        .items(&[
+            &open_chapter_setting,
+            &chapter_enabled,
+            &previous_chapter,
+            &next_chapter,
+            &restart_chapter,
+            &toggle_chapter_pause,
+            &copy_chapter_laps,
+        ])
+        .build()
+        .map_err(|error| error.to_string())?;
     let retry_input_monitoring =
         MenuItemBuilder::with_id(MENU_RETRY_INPUT_MONITORING, "入力監視を再試行")
             .build(app)
@@ -594,6 +966,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
             &toggle_overlay,
             &mouse_enabled,
             &keyboard_enabled,
+            &chapter_menu,
             &retry_input_monitoring,
             &quit,
         ])
@@ -607,6 +980,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
             overlay: toggle_overlay.clone(),
             mouse: mouse_enabled.clone(),
             keyboard: keyboard_enabled.clone(),
+            chapter: chapter_enabled.clone(),
         });
     }
 
@@ -627,6 +1001,12 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), String> {
 
             if event.id().as_ref() == MENU_TOGGLE_KEYBOARD {
                 let _ = toggle_keyboard_enabled(app);
+                sync_tray_check_items(app);
+                return;
+            }
+
+            if event.id().as_ref() == MENU_TOGGLE_CHAPTER {
+                let _ = toggle_chapter_enabled(app);
                 sync_tray_check_items(app);
                 return;
             }
@@ -671,6 +1051,10 @@ fn emit_global_mouse_event(app: &tauri::AppHandle, event: MouseEvent) {
 }
 
 fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap<String, bool>) {
+    if is_chapter_setting_focused(app) {
+        return;
+    }
+
     let payload = (event, down);
     if let Some(window) = app.get_webview_window("main") {
         if window.emit("global-key", &payload).is_ok() {
@@ -681,6 +1065,12 @@ fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap
     if let Err(error) = app.emit("global-key", payload) {
         eprintln!("Failed to emit global keyboard event: {error:?}");
     }
+}
+
+fn is_chapter_setting_focused(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window(CHAPTER_SETTING_WINDOW_LABEL)
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false)
 }
 
 fn emit_log(app: &tauri::AppHandle, message: &str) {
@@ -976,6 +1366,10 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyPress(key) => {
+                    if CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
+                        return;
+                    }
+
                     let keyboard_layout = update_keyboard_layout(
                         &detected_keyboard_layout_for_events,
                         key,
@@ -1005,6 +1399,10 @@ fn spawn_global_input_events(app: tauri::AppHandle, event_seen: Arc<AtomicBool>)
                     );
                 }
                 EventType::KeyRelease(key) => {
+                    if CHAPTER_SETTING_OPENED.load(Ordering::SeqCst) {
+                        return;
+                    }
+
                     let keyboard_layout = update_keyboard_layout(
                         &detected_keyboard_layout_for_events,
                         key,
@@ -1431,6 +1829,7 @@ pub fn run() {
             get_overlay_visible,
             get_input_monitoring_status,
             retry_input_monitoring,
+            set_chapter_input_paused,
             get_settings,
             set_settings,
             get_chapter_text,

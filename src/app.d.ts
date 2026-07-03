@@ -28,6 +28,7 @@ declare global {
 		getOverlayVisible: () => Promise<boolean>;
 		getInputMonitoringStatus: () => Promise<InputMonitoringStatus>;
 		retryInputMonitoring: () => Promise<void>;
+		setChapterInputPaused: (paused: boolean) => Promise<void>;
 		getSettings: () => Promise<AppData.Settings>;
 		setSettings: (settings: AppData.Settings) => Promise<void>;
 		getChapterText: () => Promise<string>;

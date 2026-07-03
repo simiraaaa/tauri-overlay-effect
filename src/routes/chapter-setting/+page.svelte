@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { chapterIndex, chapterText } from "$lib/scripts/app";
+  import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { chapterIndex } from "$lib/scripts/app";
   import { getAppBridge } from "$lib/scripts/app-bridge";
-  import { debounce } from "$lib/scripts/util";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
-	let textareaElement = $state<HTMLTextAreaElement | undefined>(undefined);
 	let appBridge: AppBridge | undefined;
+  let closeUnlisten: UnlistenFn | undefined;
+  let chapterDraft = $state("");
   let lineNumber = $state($chapterIndex + 1);
   $effect(() => {
     lineNumber = $chapterIndex + 1;
@@ -13,25 +15,36 @@
 
   let saved = $state(false);
 
-  onMount(async () => {
-    appBridge = await getAppBridge();
-    if (!textareaElement || !appBridge) return;
-    textareaElement.value = await appBridge.getChapterText();
+  onMount(() => {
+    const currentWindow = getCurrentWindow();
+    void (async () => {
+      appBridge = await getAppBridge();
+      await appBridge?.setChapterInputPaused(true);
+
+      closeUnlisten = await currentWindow.onCloseRequested(async (event) => {
+        event.preventDefault();
+        await currentWindow.hide();
+      });
+
+      if (!appBridge) return;
+      chapterDraft = await appBridge.getChapterText();
+    })();
+  });
+
+  onDestroy(() => {
+    closeUnlisten?.();
   });
 
   const onInput = () => {
     saved = false;
-    debouncedSave();
   };
 
   const onInputIndex = () => {
     saved = false;
-    debouncedSaveIndex();
   };
 
   const getFormattedText = (): string => {
-    if (!textareaElement) return '';
-    return textareaElement.value
+    return chapterDraft
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
@@ -39,42 +52,69 @@
   };
 
   const save = async () => {
-    const text = getFormattedText();
-    const bridge = appBridge || (await getAppBridge());
-    if (!bridge) return;
-    await bridge.setChapterText(text);
-    saved = true;
+    try {
+      const text = getFormattedText();
+      const bridge = appBridge || (await getAppBridge());
+      if (!bridge) return;
+      await bridge.setChapterText(text);
+      await bridge.setChapterIndex(lineNumber - 1);
+      chapterDraft = text;
+      saved = true;
+    } catch (error) {
+      console.error(error);
+      saved = false;
+    }
   };
 
-  const saveIndex = async () => {
-    const bridge = appBridge || (await getAppBridge());
-    if (!bridge) return;
-    await bridge.setChapterIndex(lineNumber - 1);
-    saved = true;
-  };
-
-	const debouncedSave = debounce(save, 250);
-	const debouncedSaveIndex = debounce(saveIndex, 250);
-
-	let chapterLine = $derived($chapterText.split('\n')[lineNumber - 1]);
+	let chapterLines = $derived(chapterDraft.split('\n').map((line) => line.trim()).filter(Boolean));
+	let maxLineNumber = $derived(Math.max(chapterLines.length, 1));
+	let chapterLine = $derived(chapterLines[lineNumber - 1] || '');
 </script>
 
+<svelte:head>
+  <title>チャプター設定</title>
+</svelte:head>
 
 <section>
-  <div class={saved ? "saved" : "not-saved"}>{saved ? "保存済み" : "未保存"}</div>
-  <div class="index-setting">
-    <label class="f fm">
-      表示する行:
-      <input type="number" bind:value={lineNumber} min="1" max="{$chapterText.split('\n').length}" oninput={onInputIndex}/>
-    </label>
-  </div>
-  <div class="fs12">現在の表示:</div>
-  <div class="fs14 bold"> {chapterLine}</div>
-  <textarea bind:this={textareaElement} oninput={onInput}></textarea>
+  <form action="/" method="post" onsubmit={(event) => {
+    event.preventDefault();
+    save();
+  }}>
+    <div class={saved ? "saved" : "not-saved"} aria-live="polite">{saved ? "保存済み" : "未保存"}</div>
+
+    <fieldset class="index-setting">
+      <legend>チャプター表示位置</legend>
+      <label class="f fm" for="chapter-line-number">
+        表示する行:
+        <input
+          id="chapter-line-number"
+          name="chapter-line-number"
+          type="number"
+          bind:value={lineNumber}
+          min="1"
+          max={maxLineNumber}
+          oninput={onInputIndex}
+        />
+      </label>
+    </fieldset>
+
+    <div class="preview-label">現在の表示:</div>
+    <div class="preview-text"> {chapterLine}</div>
+
+    <label class="textarea-label" for="chapter-text">チャプターテキスト</label>
+    <textarea
+      id="chapter-text"
+      name="chapter-text"
+      bind:value={chapterDraft}
+      oninput={onInput}
+      spellcheck="false"
+    ></textarea>
+
+    <button type="submit">保存する</button>
+  </form>
 </section>
 
 <style>
-
   .f {
     display: flex;
   }
@@ -82,32 +122,54 @@
     align-items: center;
   }
 
-  .fs12 {
-    font-size: 12px;
-  }
-  .fs14 {
-    font-size: 14px;
-  }
-
-  .bold {
-    font-weight: bold;
-  }
-
   .index-setting {
     font-size: 14px;
     margin: 8px 0;
+    padding: 8px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
   }
+
+  .index-setting legend {
+    padding: 0 4px;
+    font-weight: bold;
+  }
+
   .index-setting input {
-    width: 40px;
+    width: 64px;
     margin-left: 8px;
+    padding: 4px 6px;
   }
 
   section {
     height: 100%;
-    padding: 0 8px;
+    min-height: 100vh;
+    padding: 12px;
+    box-sizing: border-box;
+    background: #f7f7f7;
+    color: #111;
+  }
+
+  form {
+    height: 100%;
+    min-height: calc(100vh - 24px);
     display: flex;
     flex-direction: column;
-    justify-content: center;
+  }
+
+  .preview-label,
+  .textarea-label {
+    flex-shrink: 0;
+    font-size: 12px;
+    margin-top: 8px;
+  }
+
+  .preview-text {
+    flex-shrink: 0;
+    min-height: 20px;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 4px 0;
   }
 
   textarea {
@@ -117,6 +179,19 @@
     width: 100%;
     height: 100%;
     flex-grow: 1;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+
+  button {
+    flex-shrink: 0;
+    margin-top: 8px;
+    min-height: 36px;
+    border: 1px solid #999;
+    border-radius: 6px;
+    background: #fff;
+    font-weight: bold;
+    cursor: pointer;
   }
 
   .saved {
