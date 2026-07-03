@@ -74,12 +74,11 @@ const isTauriRuntime = (): boolean => {
 };
 
 const createTauriBridge = async (): Promise<AppBridge> => {
-  const [{ invoke }, { listen }, { getCurrentWindow }] = await Promise.all([
+  const [{ invoke }, { listen }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@tauri-apps/api/event'),
-    import('@tauri-apps/api/window'),
   ]);
-  const currentWindowLabel = getCurrentWindow().label;
+  const currentWindowLabel = new URL(globalThis.location.href).searchParams.get('overlayWindow') ?? 'main';
 
   const listenPayload = async <T>(eventName: string, callback: PayloadCallback<T>): Promise<UnlistenFn> => {
     return listen<T>(eventName, (event) => callback(event.payload));

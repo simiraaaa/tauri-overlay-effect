@@ -130,9 +130,9 @@ struct MouseEvent {
 }
 
 #[derive(Clone, Serialize)]
-struct TargetedMouseEvent<'a> {
+struct TargetedMouseEvent {
     #[serde(rename = "targetLabel")]
-    target_label: &'a str,
+    target_label: String,
     #[serde(flatten)]
     event: MouseEvent,
 }
@@ -201,11 +201,11 @@ struct KeyEvent {
 }
 
 #[derive(Clone, Serialize)]
-struct TargetedKeyEvent<'a> {
+struct TargetedKeyEvent {
     #[serde(rename = "targetLabel")]
-    target_label: &'a str,
+    target_label: String,
     event: KeyEvent,
-    down: &'a HashMap<String, bool>,
+    down: HashMap<String, bool>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize)]
@@ -726,7 +726,7 @@ fn register_global_shortcuts(app: &tauri::AppHandle) -> Result<(), String> {
 
 fn emit_global_mouse_event(app: &tauri::AppHandle, label: &str, event: MouseEvent) {
     let payload = TargetedMouseEvent {
-        target_label: label,
+        target_label: label.to_string(),
         event,
     };
 
@@ -742,9 +742,9 @@ fn emit_global_key_event(
     down: &HashMap<String, bool>,
 ) {
     let payload = TargetedKeyEvent {
-        target_label: label,
+        target_label: label.to_string(),
         event,
-        down,
+        down: down.clone(),
     };
 
     if let Err(error) = app.emit("global-key", payload) {
@@ -1026,7 +1026,8 @@ fn setup_overlay_windows(app: &tauri::AppHandle) -> Result<(), String> {
         let window = if let Some(window) = app.get_webview_window(&label) {
             window
         } else {
-            WebviewWindowBuilder::new(app, label.clone(), WebviewUrl::App("index.html".into()))
+            let url = format!("index.html?overlayWindow={label}");
+            WebviewWindowBuilder::new(app, label.clone(), WebviewUrl::App(url.into()))
                 .title("Overlay Effect")
                 .transparent(true)
                 .decorations(false)
