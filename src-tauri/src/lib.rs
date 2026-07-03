@@ -11,6 +11,7 @@ use std::thread;
 
 #[cfg(target_os = "macos")]
 use core_graphics::{
+    display::CGDisplay,
     event::CGEvent,
     event_source::{CGEventSource, CGEventSourceStateID},
 };
@@ -145,10 +146,19 @@ struct MonitorBounds {
     height: u32,
 }
 
+#[derive(Clone, Copy)]
+struct InputBounds {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
 #[derive(Clone)]
 struct OverlayWindowInfo {
     label: String,
     bounds: MonitorBounds,
+    input_bounds: Option<InputBounds>,
 }
 
 #[derive(Clone)]
@@ -708,22 +718,20 @@ fn emit_global_mouse_event(app: &tauri::AppHandle, label: &str, event: MouseEven
     }
 }
 
-fn emit_global_key_event(app: &tauri::AppHandle, event: KeyEvent, down: &HashMap<String, bool>) {
+fn emit_global_key_event(
+    app: &tauri::AppHandle,
+    label: &str,
+    event: KeyEvent,
+    down: &HashMap<String, bool>,
+) {
     let payload = (event, down);
-    let mut emitted = false;
 
-    for label in overlay_window_labels(app) {
-        if let Some(window) = app.get_webview_window(&label) {
-            emitted |= window.emit("global-key", &payload).is_ok();
+    if let Some(window) = app.get_webview_window(label) {
+        if let Err(error) = window.emit("global-key", &payload) {
+            eprintln!("Failed to emit global keyboard event to {label}: {error:?}");
         }
-    }
-
-    if emitted {
-        return;
-    }
-
-    if let Err(error) = app.emit("global-key", payload) {
-        eprintln!("Failed to emit global keyboard event: {error:?}");
+    } else if let Err(error) = app.emit("global-key", payload) {
+        eprintln!("Failed to emit global keyboard event fallback: {error:?}");
     }
 }
 
@@ -820,6 +828,55 @@ fn bounds_contains_point(bounds: MonitorBounds, x: i32, y: i32) -> bool {
     x >= bounds.x && x < right && y >= bounds.y && y < bottom
 }
 
+fn input_bounds_contains_point(bounds: InputBounds, x: i32, y: i32) -> bool {
+    let x = x as f64;
+    let y = y as f64;
+    let right = bounds.x + bounds.width;
+    let bottom = bounds.y + bounds.height;
+
+    x >= bounds.x && x < right && y >= bounds.y && y < bottom
+}
+
+#[cfg(target_os = "macos")]
+fn active_input_display_bounds() -> Vec<InputBounds> {
+    let main_display_id = CGDisplay::main().id;
+    let mut displays = CGDisplay::active_displays()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            let display = CGDisplay::new(id);
+            let bounds = display.bounds();
+
+            (
+                id == main_display_id,
+                InputBounds {
+                    x: bounds.origin.x,
+                    y: bounds.origin.y,
+                    width: bounds.size.width,
+                    height: bounds.size.height,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+
+    displays.sort_by(|(a_is_main, a_bounds), (b_is_main, b_bounds)| {
+        b_is_main
+            .cmp(a_is_main)
+            .then_with(|| a_bounds.x.total_cmp(&b_bounds.x))
+            .then_with(|| a_bounds.y.total_cmp(&b_bounds.y))
+    });
+
+    displays
+        .into_iter()
+        .map(|(_, bounds)| bounds)
+        .collect::<Vec<_>>()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn active_input_display_bounds() -> Vec<InputBounds> {
+    Vec::new()
+}
+
 fn set_overlay_window_infos(
     app: &tauri::AppHandle,
     infos: Vec<OverlayWindowInfo>,
@@ -853,26 +910,32 @@ fn setup_overlay_windows(app: &tauri::AppHandle) -> Result<(), String> {
         .get_webview_window(PRIMARY_OVERLAY_WINDOW_LABEL)
         .ok_or_else(|| "Main overlay window was not found.".to_string())?;
     let mut overlay_windows = Vec::new();
+    let input_bounds = active_input_display_bounds();
+    let primary_input_bounds = input_bounds.first().copied();
 
     configure_overlay_window(&main_window, primary_bounds);
     register_overlay_window_level_guard(app, &main_window);
     overlay_windows.push(OverlayWindowInfo {
         label: PRIMARY_OVERLAY_WINDOW_LABEL.to_string(),
         bounds: primary_bounds,
+        input_bounds: primary_input_bounds,
     });
 
-    let monitors = app
+    let mut secondary_monitors = app
         .available_monitors()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|monitor| monitor_bounds_from_parts(monitor.position(), monitor.size()))
+        .filter(|bounds| !bounds_match(*bounds, primary_bounds))
+        .collect::<Vec<_>>();
+    secondary_monitors.sort_by_key(|bounds| (bounds.x, bounds.y, bounds.width, bounds.height));
+
+    let secondary_input_bounds = input_bounds.into_iter().skip(1).collect::<Vec<_>>();
     let mut secondary_index = 1;
 
-    for monitor in monitors {
-        let bounds = monitor_bounds_from_parts(monitor.position(), monitor.size());
-        if bounds_match(bounds, primary_bounds) {
-            continue;
-        }
-
+    for bounds in secondary_monitors {
         let label = format!("{SECONDARY_OVERLAY_WINDOW_PREFIX}{secondary_index}");
+        let input_bounds = secondary_input_bounds.get(secondary_index - 1).copied();
         secondary_index += 1;
 
         let window = if let Some(window) = app.get_webview_window(&label) {
@@ -894,7 +957,11 @@ fn setup_overlay_windows(app: &tauri::AppHandle) -> Result<(), String> {
 
         configure_overlay_window(&window, bounds);
         register_overlay_window_level_guard(app, &window);
-        overlay_windows.push(OverlayWindowInfo { label, bounds });
+        overlay_windows.push(OverlayWindowInfo {
+            label,
+            bounds,
+            input_bounds,
+        });
     }
 
     set_overlay_window_infos(app, overlay_windows)
@@ -916,11 +983,21 @@ fn normalize_global_mouse_position(
             width: 1,
             height: 1,
         },
+        input_bounds: None,
     });
 
     let monitor = windows
         .iter()
-        .find(|info| bounds_contains_point(info.bounds, raw_x, raw_y))
+        .find(|info| {
+            info.input_bounds
+                .map(|bounds| input_bounds_contains_point(bounds, raw_x, raw_y))
+                .unwrap_or(false)
+        })
+        .or_else(|| {
+            windows
+                .iter()
+                .find(|info| bounds_contains_point(info.bounds, raw_x, raw_y))
+        })
         .cloned()
         .or_else(|| {
             app.monitor_from_point(raw_x as f64, raw_y as f64)
@@ -936,13 +1013,18 @@ fn normalize_global_mouse_position(
         })
         .unwrap_or(fallback);
 
-    let monitor_left = monitor.bounds.x as f64;
-    let monitor_top = monitor.bounds.y as f64;
-    let monitor_height = monitor.bounds.height as f64;
+    let input_bounds = monitor.input_bounds.unwrap_or(InputBounds {
+        x: monitor.bounds.x as f64,
+        y: monitor.bounds.y as f64,
+        width: monitor.bounds.width as f64,
+        height: monitor.bounds.height as f64,
+    });
 
-    let scaled_x = raw_x as f64 - monitor_left;
-    let top_local_y = raw_y as f64 - monitor_top;
-    let bottom_global_y = monitor_height - top_local_y;
+    let scaled_x =
+        ((raw_x as f64 - input_bounds.x) / input_bounds.width) * monitor.bounds.width as f64;
+    let top_local_y =
+        ((raw_y as f64 - input_bounds.y) / input_bounds.height) * monitor.bounds.height as f64;
+    let bottom_global_y = monitor.bounds.height as f64 - top_local_y;
 
     let max_x = monitor.bounds.width as i32;
     let max_y = monitor.bounds.height as i32;
@@ -1024,6 +1106,17 @@ fn latest_global_mouse_position(
         .lock()
         .ok()
         .and_then(|position| position.clone())
+}
+
+#[cfg(target_os = "macos")]
+fn latest_global_mouse_label(
+    app: &tauri::AppHandle,
+    last_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
+    cursor_position: &Arc<Mutex<Option<TargetedMousePosition>>>,
+) -> String {
+    latest_global_mouse_position(app, last_position, cursor_position)
+        .map(|position| position.label)
+        .unwrap_or_else(|| PRIMARY_OVERLAY_WINDOW_LABEL.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -1222,6 +1315,11 @@ fn spawn_global_input_events(
                     emit_key_if_state_changed(
                         &app_for_events,
                         &pressed_keys_for_events,
+                        &latest_global_mouse_label(
+                            &app_for_normalize_events,
+                            &normalized_position_for_events,
+                            &cursor_position_for_events,
+                        ),
                         KeyEvent {
                             name: name.clone(),
                             state: "DOWN",
@@ -1252,6 +1350,11 @@ fn spawn_global_input_events(
                     emit_key_if_state_changed(
                         &app_for_events,
                         &pressed_keys_for_events,
+                        &latest_global_mouse_label(
+                            &app_for_normalize_events,
+                            &normalized_position_for_events,
+                            &cursor_position_for_events,
+                        ),
                         KeyEvent {
                             name: name.clone(),
                             state: "UP",
@@ -1399,6 +1502,7 @@ fn start_global_input_monitoring(app: tauri::AppHandle) {
 fn emit_key_if_state_changed(
     app: &tauri::AppHandle,
     pressed_keys: &Arc<Mutex<HashMap<String, bool>>>,
+    label: &str,
     event: KeyEvent,
 ) {
     let down = match pressed_keys.lock() {
@@ -1406,7 +1510,7 @@ fn emit_key_if_state_changed(
         Err(_) => HashMap::new(),
     };
 
-    emit_global_key_event(app, event, &down);
+    emit_global_key_event(app, label, event, &down);
 }
 
 #[cfg(target_os = "macos")]
